@@ -1,0 +1,227 @@
+---
+name: photo-to-html
+description: "Reconstruct a presentation slide from a photo as a pixel-faithful, self-contained HTML file (vector text + inline SVG diagrams + optional embedded raster crops). Use this skill whenever a user uploads a photo of a slide (projector screen, conference TV, monitor, PDF screenshot) and wants a high-fidelity / lossless / archival reconstruction in HTML — including phrasing like '像素级重建', '高精度还原', 'HTML无损保存', 'rebuild this slide as HTML', 'vectorize this slide photo', or 'archive this conference slide'. Also use when the user wants a web-viewable, zoomable, text-searchable version of a slide rather than an editable .pptx (for .pptx output, use photo-to-pptx instead; the extraction and analysis stages are shared). Handles perspective correction, color sampling, math notation, technical diagram redraw as SVG, and screenshot-based verification."
+license: Proprietary
+---
+
+# Photo-to-HTML Slide Reconstruction
+
+Turn a photograph of a slide into a **single self-contained HTML file** that reproduces the slide at near-pixel fidelity. Compared to the sibling `photo-to-pptx` skill, HTML output is the *archival/lossless* path: text is real selectable text, diagrams are resolution-independent inline SVG, and the file renders identically in any browser with zero dependencies.
+
+**When to choose HTML over PPTX**: user says 无损/像素级/高精度/archive/web view, or the slide contains math notation, dense technical diagrams, or fine geometry that PowerPoint primitives reproduce poorly. When the user wants to *edit* the deck afterwards, prefer `photo-to-pptx`.
+
+## The pipeline at a glance
+
+1. **Extract** — perspective-correct the slide out of the photo (`scripts/extract_slide.py`)
+1.5. **OCR / structure** — machine-read text, coordinates, formula LaTeX, table HTML with PP-StructureV3 (text layer = **PP-OCRv6**) → `spec.json` (`scripts/ocr_extract.py`)
+2. **Inventory** — enumerate every element: text (verbatim), diagrams, icons, colors, coordinates. *The spec does most of this for you;* your remaining job is the visual reasoning OCR can't do — classifying and redrawing figures.
+3. **Rebuild** — one fixed-canvas HTML file per slide; vector first, raster crop only as fallback
+4. **Verify** — headless-Chromium screenshot, compare side-by-side with the original, fix, repeat
+
+Stages 1–2 are identical in spirit to `photo-to-pptx` — if that skill is installed, its `references/extraction_edge_cases.md` and `references/svg_icon_library.md` apply here verbatim.
+
+## Two ways to run it
+
+**Auto (closed loop) — "one image in, one HTML/PPT out", no LLM in the loop.** Stage 1.5 reads the slide; the assembler positions selectable text and embeds every non-text region as a faithful, white-balanced photo crop. Best for **batch archival** of many conference slides where you don't need vector-editable diagrams.
+
+```bash
+bash scripts/setup_paddle.sh                                  # ONCE, on open network (downloads PP-OCRv6 weights)
+python scripts/run_pipeline.py photo.jpg --out-dir out --format html   # html | pptx | both
+```
+
+This is the path to reach for first when the request is "just archive these slides faithfully." It is faithful **by construction** — non-text regions are the real pixels — but diagrams stay raster.
+
+**Vector (highest fidelity) — the spec feeds the manual rebuild below.** Stop after the spec, then redraw `figure`-type blocks as resolution-independent inline SVG (Stages 2–4). Reach for this when a slide's *structure is the content* (the EDA architecture diagram, the GCRP routing schematic) and you want crisp, zoomable, editable vector output.
+
+```bash
+python scripts/run_pipeline.py photo.jpg --out-dir out --mode spec     # -> out/spec.json + out/spec.overlay.png
+```
+
+Then continue with Stages 2–4: text/formulas/tables are pre-transcribed with coordinates in the spec; open `spec.overlay.png` to see which regions were classed as figures and need an SVG redraw. **Mixed is normal and best**: trust the spec for text/formula/table, redraw the few figures that matter, let auto-mode crops stand in for irregular instance-dense figures the vector-vs-raster tree says to crop anyway.
+
+Full details, the spec schema, model mirrors (BOS/HF/ModelScope), and troubleshooting live in `references/ocr_integration.md`.
+
+---
+
+## Stage 1: Extract
+
+```bash
+python scripts/extract_slide.py <photo.jpg> --output slide_clean.jpg
+```
+
+Detects the bright screen, 4-point perspective transform, CLAHE contrast recovery, forces 16:9. View the result before proceeding — a skewed or cropped extraction poisons every later measurement.
+
+---
+
+## Stage 1.5: OCR / structure (the machine-read spec)
+
+```bash
+python scripts/ocr_extract.py out/slide_clean.jpg --out out/spec
+# force a tier:  --det-model PP-OCRv6_medium_det --rec-model PP-OCRv6_medium_rec --device gpu
+```
+
+Runs PP-StructureV3 — layout analysis + table-structure + formula→LaTeX, with **PP-OCRv6** (PaddleOCR ≥ 3.7.0) as the text detection/recognition layer — and writes `spec.json` plus a `spec.overlay.png` showing detected blocks. Coordinates are in **cleaned-image pixels**, the same space as every Stage 2 measurement (`scale = 1280 / cleaned_width`), so they drop straight onto the canvas with no extra transform.
+
+Why PP-StructureV3 rather than bare PP-OCRv6: v6 is the text layer only (det+rec — strings + boxes, tiny and fast, beating much larger VLMs at pure text, but no formulas/tables/reading-order). PP-StructureV3 wraps it and adds exactly the structure a faithful rebuild needs. The block `type` is normalized to `title | text | caption | formula | table | figure`; figures are what you redraw.
+
+Weights download on first use from HuggingFace/BOS/ModelScope — hosts the sandbox allowlist usually blocks — so run `setup_paddle.sh` once on open network (set `PADDLE_PDX_MODEL_SOURCE=BOS` if in mainland China). See `references/ocr_integration.md`.
+
+---
+
+## Stage 2: Inventory (the spec)
+
+View the cleaned image and write a structured inventory **before any HTML**:
+
+- **Canvas mapping**: note the cleaned image's pixel size. All layout coordinates will be measured in cleaned-image pixels and scaled to the 1280×720 canvas (`scale = 1280 / cleaned_width`). When unsure of a position, crop and view that region.
+- **Verbatim text** — every title, bullet, label, legend, footnote, page number. Transcribe math exactly (subscripts, superscripts, script letters, set notation).
+- **Color palette** — sample real hex values from the image (title color, header-bar fill, card fill, border, body text, accents). Never guess defaults.
+- **Every visual element**, classified by the vector-vs-raster decision tree (below).
+- **Connectors** — arrows (single/double/dashed), return paths of feedback loops, dimension arrows in technical figures.
+
+## The vector-vs-raster decision tree
+
+For each non-text visual, ask in order:
+
+```
+1. Is it geometric AND regular (rects, lines, polygons, simple curves,
+   charts, block diagrams, logic symbols, layouts whose structure is
+   the content)?
+      → Redraw as inline SVG.            [default for most slides]
+
+1b. Is it geometric but IRREGULAR / instance-dense — random net routes,
+    scattered elements whose *exact positions and topology ARE the
+    content*, hand-placed examples you'd have to measure one by one?
+      → Crop from the cleaned image (scripts/crop_region.py
+        --white-balance). A redraw can only approximate such figures;
+        every approximation is a visible detail mismatch.
+
+2. Is it a smooth gradient/false-color field (heatmap, warpage surface,
+   FEM/CFD render)?
+      → If used as a small thumbnail where only the gist matters:
+        stylized SVG gradient. If the actual field pattern matters or a
+        first SVG attempt reads "cartoonish": crop it.
+
+3. Is it continuous-tone content that can't be redrawn at all
+   (photograph, screenshot, lit 3D render, dense scatter plot)?
+      → Crop + embed as base64 data-URI. Keep crops rectangular,
+        aligned to the element's bbox.
+
+4. Is it a third-party logo / org mark?
+      → Crop with background keying: crop_region.py --key-light 232
+        gives the *original* mark on a transparent background — better
+        than any hand-drawn approximation. Fall back to a simplified
+        placeholder mark + text name only if keying fails (busy bg).
+```
+
+**Escalation rule (applies during Stage 4 too)**: if a vector redraw of a
+complex region still mismatches the original after ONE fix iteration, stop
+polishing the SVG and replace it with a crop. Vector-vs-raster is a fidelity
+decision, not a pride decision — the crop *is* the original.
+
+**Blending crops into a vector page** (all in `crop_region.py`):
+`--white-balance` kills the photo color cast (rectangular diagram crops);
+`--flat-field` removes vignetting/illumination gradients; `--key-light N`
+makes light backgrounds transparent (logos/marks) — it flat-fields first,
+because global luminance keying fails on vignetted corners.
+
+Crops keep the output a *single file* — never reference external image files. Rule 1 vs 1b is the judgment call that matters: regular structure (a grid of pads, a feedback loop) redraws perfectly; irregular instance data (which pin connects where, exact trunk offsets) does not. Read `references/vector_vs_raster.md` for worked examples and the escalation rule.
+
+**Icons carry meaning** — the critical lesson inherited from `photo-to-pptx`: technical icons (transistors, logic gates, wafers, chips, heatmaps) encode domain semantics. Hand-draw small inline SVGs that preserve the semantics; never substitute generic look-alikes. Audit icon choices in the inventory, before coding.
+
+---
+
+## Stage 3: Rebuild
+
+Copy `references/html_canvas_template.html` as the starting point. Conventions it establishes (do not deviate without reason):
+
+- **Fixed canvas**: `.slide{position:relative;width:1280px;height:720px;overflow:hidden}`. Everything inside is `position:absolute` with coordinates derived from cleaned-image measurements. Absolute positioning, not flex/grid for the page — fidelity beats responsiveness here, and it makes the verify-fix loop local (moving one element never reflows another).
+- **CSS variables** for the sampled palette in `:root`.
+- **Inline SVG** for every diagram, each with its own local `viewBox` and positioned with `style="position:absolute;left:..;top:.."`. Local coordinates keep each diagram independently debuggable.
+- **System font stack** for body text; serif math stack (`"STIX Two Math","Cambria Math","Times New Roman"`) for math. No webfonts — self-containment.
+- One HTML file per slide; multi-slide jobs get an `index.html` linking them.
+
+**Math notation** is a classic failure point: naive `<sub><sup>` after a closing brace renders side-by-side, not stacked. Use the stacked-script flexbox pattern, Unicode script letters (𝒢 𝒮 𝒩…), and italic-serif conventions in `references/math_notation.md`.
+
+**Layout patterns** (header-bar sections, bordered cards, dashed containers with interrupting titles, step→arrow→step chains, feedback-loop return paths, legends, footers) are catalogued with copy-paste CSS in `references/layout_and_css_patterns.md`.
+
+**Technical diagram redraw recipes** (channel routing, dimension arrows, trunk/envelope boxes, mini heatmaps, waveforms, wafer maps, 3D cubes) are in `references/svg_diagram_patterns.md`.
+
+Build order (same rationale as photo-to-pptx — errors localize):
+title → top row → left column → middle → right column → bottom strip → footer. Complete each region (shapes + text + icons + arrows) before the next.
+
+---
+
+## Stage 4: Verify — the screenshot loop
+
+Never ship unrendered HTML. Screenshot with headless Chromium:
+
+```bash
+PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers python scripts/render_verify.py slide.html
+# writes slide_render.png (1280×720) and, with --ref slide_clean.jpg,
+# a side-by-side comparison sheet slide_compare.png
+```
+
+View the render (and the comparison sheet) and check, in this order:
+
+1. **Clipping/overflow** — content cut at slide bottom or hidden behind banners/panels (the #1 defect; fix by compacting paddings/fonts or moving panels up, never by letting it clip)
+2. **Collisions** — panels overlapping text, captions colliding with footers
+3. **Math** — sub/sup stacking, script letters rendering as tofu (font fallback)
+4. **Icons** — blobs, missing arrowheads (usually SVG arc `sweep-flag` or fill mistakes)
+5. **Color drift** — compare against the sampled palette, not memory
+6. **Text fidelity** — re-read every label against the cleaned image once
+7. **Detail mismatch in complex figures** — compare redrawn diagrams
+   element-by-element against the original (the `--ref` comparison sheet
+   makes this fast). Topology wrong / elements missing / positions
+   approximated? → escalation rule: replace that SVG with a crop now.
+8. **Crop seams** — embedded crops showing a gray tile edge or halo
+   against the page background → re-crop with `--white-balance` /
+   `--flat-field`, or `--key-light` for marks.
+
+Expect 2–4 real defects on the first render. Fix all, re-render, then stop — don't chase sub-pixel alignment.
+
+If Playwright/Chromium is unavailable, fall back to `wkhtmltoimage` (older WebKit: avoid flex/grid-dependent layout — another reason the template uses absolute positioning) or deliver with a note that the user should eyeball it in a browser.
+
+---
+
+## Quick troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `{gᵢ}` superscript appears beside subscript | naive `<sub><sup>` | stacked-script flexbox pattern (`math_notation.md`) |
+| Bottom rows of a panel vanish | panel taller than remaining space, `overflow:hidden` clips | compact row padding/font, move panel up; verify with crop screenshot |
+| Diagram fine alone, wrong on page | viewBox aspect ≠ element width/height | keep `width/height` attrs equal to viewBox dims (or same ratio) |
+| Script letters (𝒢) render as boxes | missing math font in renderer | the serif math font-stack; worst case use `<i>G</i>` + note |
+| Raster crop looks muddy next to crisp vector | expected (photo source) | shrink display size of crop, or redraw after all (rule 1) |
+| Icon is a solid blob | filled path that should be stroked | `fill="none" stroke=...`; see svg library in photo-to-pptx |
+
+## Bundled scripts
+
+- `scripts/run_pipeline.py` — **closed-loop orchestrator**: extract → ocr → assemble → verify (`--mode auto|spec`, `--format html|pptx|both`, `--verify`)
+- `scripts/extract_slide.py` — Stage 1 (identical to photo-to-pptx's; opencv + Pillow)
+- `scripts/ocr_extract.py` — Stage 1.5: PP-StructureV3 (PP-OCRv6 text layer) → `spec.json` + overlay
+- `scripts/assemble_html.py` — auto-mode assembler: `spec.json` → single self-contained HTML (selectable text + faithful base64 crops; LaTeX/table-HTML kept as `data-*`)
+- `scripts/setup_paddle.sh` — one-time `paddlepaddle` + `paddleocr>=3.7.0` install and PP-OCRv6 weight prefetch
+- `scripts/crop_region.py` — crop a bbox from the cleaned image → base64 data-URI / `<img>` tag on stdout
+- `scripts/render_verify.py` — Stage 4 screenshot + optional side-by-side sheet (playwright; falls back to wkhtmltoimage)
+
+## Reference files
+
+- `references/ocr_integration.md` — **Stage 1.5 + auto/vector modes, spec schema, model mirrors, troubleshooting**
+- `references/html_canvas_template.html` — the canvas scaffold; **always start from this** (vector path)
+- `references/vector_vs_raster.md` — hybrid decision tree, worked examples
+- `references/layout_and_css_patterns.md` — slide-layout CSS cookbook
+- `references/svg_diagram_patterns.md` — technical-diagram SVG recipes
+- `references/math_notation.md` — math typesetting in plain HTML/CSS
+
+## Dependencies
+
+```bash
+# Rebuild + verify (vector path, always needed):
+pip install opencv-python Pillow numpy playwright --break-system-packages
+# Chromium binaries usually pre-installed at /opt/pw-browsers in the Claude environment
+
+# OCR closed loop (Stage 1.5) — run once on open network; the sandbox allowlist
+# blocks the model-weight hosts, so do this on your own machine/server:
+bash scripts/setup_paddle.sh          # CPU   (installs paddlepaddle>=3.3 + paddleocr>=3.7.0)
+bash scripts/setup_paddle.sh gpu      # CUDA build
+```

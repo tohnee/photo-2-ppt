@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<!--
+  html_canvas_template.html — starting scaffold for photo-to-html reconstructions.
+  Copy this file, rename per slide, replace palette + content.
+
+  Conventions:
+  - Fixed 1280×720 canvas, absolute positioning throughout.
+  - Coordinates: measure in cleaned-image pixels, multiply by (1280 / cleaned_width).
+  - Palette: sample hex values from the cleaned image; never guess.
+  - All diagrams: inline <svg> with local viewBox, absolutely positioned.
+  - Single file. No external images (use base64 data-URIs), no webfonts, no JS required.
+  - The optional .fit wrapper scales the canvas to the viewport for comfortable viewing
+    without affecting internal coordinates.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SLIDE TITLE — Slide N</title>
+<style>
+  :root{
+    /* === SAMPLED PALETTE — replace every value === */
+    --primary:#5B2EC4;   /* header bars / section titles */
+    --fill:#f6f2fe;      /* card light fill */
+    --border:#9b85dd;    /* card border (≈1 tone darker than fill) */
+    --text:#33285c;      /* body text */
+    --accent:#b8860b;    /* secondary accent if present */
+    --bg:#fdfcff;        /* slide background */
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{background:#222}
+
+  /* viewport-fit wrapper (optional, keeps internal coords intact) */
+  .fit{display:flex;justify-content:center;padding:16px 0}
+  @media (max-width:1320px){
+    .fit .slide{transform:scale(calc((100vw - 32px)/1280));transform-origin:top center}
+    .fit{height:calc((100vw - 32px)*0.5625 + 32px)}
+  }
+
+  .slide{
+    position:relative;width:1280px;height:720px;background:var(--bg);
+    overflow:hidden;margin:0 auto;
+    font-family:"Segoe UI","Helvetica Neue",Arial,"Noto Sans",sans-serif;
+    color:var(--text);
+  }
+
+  /* --- math typography (see references/math_notation.md) --- */
+  .math{font-family:"STIX Two Math","Cambria Math","Times New Roman",serif;font-style:italic}
+  .mathup{font-family:"STIX Two Math","Cambria Math","Times New Roman",serif;font-style:normal}
+  sub,sup{font-size:0.62em}
+  .ss{display:inline-flex;flex-direction:column;vertical-align:-0.45em;
+      line-height:0.95;font-size:0.6em;font-style:normal;margin-left:1px}
+  .ss i{font-style:italic}
+
+  /* --- common slide primitives (see layout_and_css_patterns.md) --- */
+  .card{position:absolute;background:var(--fill);border:1.5px solid var(--border);border-radius:7px}
+  .bar{position:absolute;background:var(--primary);color:#fff;font-weight:800;
+       text-align:center;border-radius:5px 5px 0 0}
+  .panel{position:absolute;border:1.5px solid var(--border);border-radius:7px;background:#fbf9ff}
+  .arrow{position:absolute;font-weight:800;color:var(--primary)}
+  .note{position:absolute;font-weight:600;color:var(--text);text-align:center}
+  svg{display:block}
+  svg text{font-family:"STIX Two Math","Cambria Math","Times New Roman",serif}
+</style>
+</head>
+<body>
+<div class="fit">
+<div class="slide">
+
+  <!-- 1. title -->
+  <!-- 2. top row -->
+  <!-- 3. left column -->
+  <!-- 4. middle -->
+  <!-- 5. right column -->
+  <!-- 6. bottom strip -->
+  <!-- 7. footer / page number -->
+
+</div>
+</div>
+</body>
+</html>
