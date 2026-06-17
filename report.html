@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Photo-to-HTML/PPT 方案设计与使用指导</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-card: #f6f8fa;
+    --bg-code: #f0f2f5;
+    --border: #d0d7de;
+    --border-light: #e8eaed;
+    --text: #1f2328;
+    --text-dim: #656d76;
+    --text-muted: #8c959f;
+    --accent: #0969da;
+    --accent-2: #1a7f37;
+    --accent-3: #bc4c00;
+    --accent-4: #8250df;
+    --warn: #9a6700;
+    --danger: #cf222e;
+    --shadow: 0 1px 3px rgba(31,35,40,0.12), 0 8px 24px rgba(31,35,40,0.08);
+    --shadow-sm: 0 1px 0 rgba(31,35,40,0.04);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+
+  /* Layout */
+  .layout { display: flex; min-height: 100vh; }
+  nav.toc {
+    width: 280px; flex-shrink: 0;
+    background: var(--bg-card);
+    border-right: 1px solid var(--border);
+    padding: 24px 20px;
+    position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  }
+  nav.toc h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--text-dim); margin-bottom: 12px;
+  }
+  nav.toc ol { list-style: none; }
+  nav.toc ol li { margin: 4px 0; }
+  nav.toc ol li a {
+    color: var(--text-dim); text-decoration: none; font-size: 13.5px;
+    display: block; padding: 4px 10px; border-radius: 6px;
+    border-left: 2px solid transparent;
+  }
+  nav.toc ol li a:hover { color: var(--accent); background: rgba(9,105,218,0.08); }
+  nav.toc ol li a.lvl2 { padding-left: 24px; font-size: 13px; }
+  nav.toc ol li.section-title {
+    margin-top: 16px; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; color: var(--accent); letter-spacing: 0.06em;
+    padding: 4px 10px;
+  }
+
+  main { flex: 1; padding: 48px 56px; max-width: 1100px; }
+
+  /* Typography */
+  h1 { font-size: 32px; margin-bottom: 8px; letter-spacing: -0.02em; color: var(--text); }
+  h1 .sub { color: var(--text-dim); font-size: 16px; font-weight: 400; }
+  h2 {
+    font-size: 24px; margin: 48px 0 16px;
+    padding-bottom: 10px; border-bottom: 1px solid var(--border);
+    letter-spacing: -0.01em; color: var(--text);
+  }
+  h2 .num {
+    color: var(--accent); font-family: "SF Mono", Consolas, monospace;
+    font-size: 18px; margin-right: 10px;
+  }
+  h3 { font-size: 18px; margin: 28px 0 12px; color: var(--text); }
+  h4 { font-size: 15px; margin: 20px 0 8px; color: var(--accent); }
+  p { margin-bottom: 12px; }
+  ul, ol { margin: 8px 0 16px 24px; }
+  li { margin-bottom: 6px; }
+  strong { color: var(--text); font-weight: 600; }
+  code {
+    font-family: "SF Mono", "Fira Code", Consolas, monospace;
+    background: var(--bg-code); padding: 2px 6px; border-radius: 4px;
+    font-size: 13px; color: var(--accent-4);
+    border: 1px solid var(--border-light);
+  }
+  pre {
+    background: var(--bg-code); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px 20px; overflow-x: auto;
+    margin: 12px 0 20px; font-size: 13px; line-height: 1.6;
+  }
+  pre code { background: none; padding: 0; color: var(--text); border: none; }
+  .comment { color: var(--text-muted); font-style: italic; }
+  .kw { color: var(--accent-3); }
+  .str { color: var(--accent-2); }
+  .num-lit { color: var(--warn); }
+
+  /* Components */
+  .header {
+    background: linear-gradient(135deg, #ffffff 0%, #f6f8fa 100%);
+    border: 1px solid var(--border);
+    border-radius: 12px; padding: 32px 36px; margin-bottom: 40px;
+    box-shadow: var(--shadow);
+  }
+  .header .badges { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    display: inline-block; padding: 4px 12px; border-radius: 20px;
+    font-size: 12px; font-weight: 500; border: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .badge.blue { color: var(--accent); border-color: rgba(9,105,218,0.35); background: rgba(9,105,218,0.06); }
+  .badge.green { color: var(--accent-2); border-color: rgba(26,127,55,0.35); background: rgba(26,127,55,0.06); }
+  .badge.purple { color: var(--accent-4); border-color: rgba(130,80,223,0.35); background: rgba(130,80,223,0.06); }
+  .badge.orange { color: var(--accent-3); border-color: rgba(188,76,0,0.35); background: rgba(188,76,0,0.06); }
+
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px 24px; margin: 16px 0;
+    box-shadow: var(--shadow-sm);
+  }
+  .card-title {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--accent); margin-bottom: 10px; font-weight: 600;
+  }
+
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 13.5px; background: var(--bg); }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border-light); }
+  th { color: var(--accent); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; background: var(--bg-card); }
+  tr:hover td { background: rgba(9,105,218,0.04); }
+  td code { font-size: 12px; }
+
+  /* Pipeline diagram */
+  .pipeline {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+    margin: 20px 0;
+  }
+  .stage {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px; position: relative;
+    border-top: 3px solid var(--accent);
+    box-shadow: var(--shadow-sm);
+  }
+  .stage.s1 { border-top-color: var(--accent-3); }
+  .stage.s2 { border-top-color: var(--warn); }
+  .stage.s3 { border-top-color: var(--accent-2); }
+  .stage.s4 { border-top-color: var(--accent-4); }
+  .stage .step {
+    position: absolute; top: -12px; right: 12px;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 12px; padding: 2px 10px; font-size: 11px;
+    color: var(--text-dim); font-family: monospace;
+  }
+  .stage h4 { margin: 0 0 8px; font-size: 14px; }
+  .stage .script { font-size: 12px; color: var(--accent); font-family: monospace; }
+  .stage p { font-size: 12.5px; color: var(--text-dim); margin: 6px 0 0; }
+  .arrow {
+    text-align: center; color: var(--text-dim); font-size: 20px;
+    margin: -8px 0;
+  }
+
+  /* Callouts */
+  .callout {
+    border-left: 3px solid var(--accent); background: var(--bg-card);
+    padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 16px 0;
+    box-shadow: var(--shadow-sm);
+  }
+  .callout.warn { border-left-color: var(--warn); background: #fff8c5; }
+  .callout.danger { border-left-color: var(--danger); background: #ffebe9; }
+  .callout.success { border-left-color: var(--accent-2); background: #dafbe1; }
+  .callout-title { font-weight: 600; margin-bottom: 6px; font-size: 14px; }
+  .callout p { margin: 0; font-size: 13.5px; }
+
+  /* Model grid */
+  .model-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px; margin: 16px 0;
+  }
+  .model-card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px;
+    box-shadow: var(--shadow-sm);
+  }
+  .model-card .name { font-family: monospace; font-size: 12.5px; color: var(--accent); }
+  .model-card .role { font-size: 11.5px; color: var(--text-dim); margin-top: 4px; }
+  .model-card .size { font-size: 11px; color: var(--warn); margin-top: 4px; }
+
+  /* Priority ladder */
+  .ladder { display: flex; flex-direction: column; gap: 6px; margin: 16px 0; }
+  .ladder .rung {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 14px; font-size: 13px;
+  }
+  .ladder .rung .prio {
+    background: var(--accent); color: var(--bg); border-radius: 50%;
+    width: 22px; height: 22px; display: flex; align-items: center;
+    justify-content: center; font-weight: 700; font-size: 12px; flex-shrink: 0;
+  }
+  .ladder .rung.bundled { border-color: var(--accent-2); background: #dafbe1; }
+  .ladder .rung.bundled .prio { background: var(--accent-2); }
+  .ladder .rung.opt-in { border-color: var(--accent-4); background: #fbeaff; }
+  .ladder .rung.opt-in .prio { background: var(--accent-4); }
+
+  /* Stats */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 20px 0; }
+  .stat {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px; text-align: center;
+    box-shadow: var(--shadow-sm);
+  }
+  .stat .num { font-size: 28px; font-weight: 700; color: var(--accent); }
+  .stat .label { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+
+  /* Code annotations */
+  .code-anno {
+    border-left: 2px solid var(--accent-3); padding-left: 14px;
+    margin: 8px 0 16px; color: var(--text-dim); font-size: 13px;
+    background: var(--bg-card); padding: 12px 14px; border-radius: 0 6px 6px 0;
+  }
+
+  /* Footer */
+  footer {
+    margin-top: 60px; padding-top: 24px; border-top: 1px solid var(--border);
+    color: var(--text-dim); font-size: 12.5px;
+  }
+
+  /* Responsive */
+  @media (max-width: 980px) {
+    nav.toc { display: none; }
+    main { padding: 24px; }
+    .pipeline { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<!-- TOC -->
+<nav class="toc">
+  <h2>目录</h2>
+  <ol>
+    <li class="section-title">方案设计</li>
+    <li><a href="#overview">1. 项目概述</a></li>
+    <li><a href="#architecture">2. 整体架构</a></li>
+    <li><a href="#pipeline">3. 四阶段管道</a></li>
+    <li><a href="#models">4. 模型选择策略</a></li>
+    <li><a href="#v5-vs-v6" class="lvl2">4.2 PP-OCRv5 vs v6</a></li>
+    <li><a href="#offline" class="lvl2">4.3 离线分发设计</a></li>
+    <li><a href="#pptx">5. PPTX 重建策略</a></li>
+    <li><a href="#color" class="lvl2">5.2 颜色采样算法</a></li>
+    <li><a href="#testing">6. 测试覆盖</a></li>
+
+    <li class="section-title">使用指导</li>
+    <li><a href="#prereq">7. 环境准备</a></li>
+    <li><a href="#install">8. 安装步骤</a></li>
+    <li><a href="#quickstart">9. 快速开始</a></li>
+    <li><a href="#v6-download" class="lvl2">9.2 v6 按需下载</a></li>
+    <li><a href="#cli" class="lvl2">9.3 CLI 参数</a></li>
+    <li><a href="#troubleshoot">10. 故障排查</a></li>
+    <li><a href="#api">11. 脚本 API</a></li>
+  </ol>
+</nav>
+
+<!-- Main -->
+<main>
+
+<div class="header">
+  <h1>Photo-to-HTML / PPT <span class="sub">— 方案设计与使用指导</span></h1>
+  <p style="color: var(--text-dim); font-size: 15px; margin-top: 8px;">
+    将投影屏/显示器/截图中的幻灯片照片，重建为像素级保真的自包含 HTML 或可编辑 PPTX。
+    基于 PaddleOCR 3.7 PP-StructureV3 管道，支持完全离线运行。
+  </p>
+  <div class="badges">
+    <span class="badge blue">PaddleOCR 3.7.0</span>
+    <span class="badge green">PP-StructureV3</span>
+    <span class="badge purple">11 模型 · 1.7 GB</span>
+    <span class="badge orange">离线优先</span>
+    <span class="badge blue">96 测试通过</span>
+    <span class="badge green">Git LFS</span>
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="num">4</div><div class="label">处理阶段</div></div>
+  <div class="stat"><div class="num">11</div><div class="label">子模型</div></div>
+  <div class="stat"><div class="num">1.7<span style="font-size:16px">GB</span></div><div class="label">离线权重</div></div>
+  <div class="stat"><div class="num">96</div><div class="label">单元测试</div></div>
+</div>
+
+<!-- ==================== 方案设计 ==================== -->
+
+<h2 id="overview"><span class="num">01</span>项目概述</h2>
+
+<p>本项目解决一个具体问题：<strong>给定一张幻灯片照片（投影屏、会议电视、显示器、PDF 截图），重建为可编辑/可归档的数字产物</strong>。</p>
+
+<p>提供两条输出路径，共享同一套 OCR 提取与坐标系统：</p>
+
+<div class="card">
+  <div class="card-title">双输出路径</div>
+  <table>
+    <thead><tr><th>路径</th><th>输出</th><th>适用场景</th><th>文本</th><th>图表</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>HTML</strong></td>
+        <td>单个自包含 .html</td>
+        <td>归档、无损保存、Web 浏览、可缩放</td>
+        <td>真实可选文本</td>
+        <td>内联 SVG（矢量）或 base64 裁剪</td>
+      </tr>
+      <tr>
+        <td><strong>PPTX</strong></td>
+        <td>可编辑 .pptx</td>
+        <td>二次编辑、插入现有 PPT、办公协作</td>
+        <td>原生 TextBox</td>
+        <td>原生 Table / 图片裁剪</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h2 id="architecture"><span class="num">02</span>整体架构</h2>
+
+<p>系统采用<strong>管道式架构</strong>，每个阶段产出独立产物，失败时可单独重试。所有坐标统一在"清洗后图像像素"空间，下游只需一个 <code>scale = 1280 / cleaned_width</code> 即可映射到画布。</p>
+
+<div class="pipeline">
+  <div class="stage s1">
+    <span class="step">Stage 1</span>
+    <h4>Extract</h4>
+    <div class="script">extract_slide.py</div>
+    <p>透视校正 + CLAHE 对比度恢复，输出 16:9 清洗图</p>
+  </div>
+  <div class="stage s2">
+    <span class="step">Stage 1.5</span>
+    <h4>OCR / Structure</h4>
+    <div class="script">ocr_extract.py</div>
+    <p>PP-StructureV3 → spec.json（文本+坐标+LaTeX+表格HTML）</p>
+  </div>
+  <div class="stage s3">
+    <span class="step">Stage 2-3</span>
+    <h4>Assemble</h4>
+    <div class="script">assemble_html.py<br>assemble_pptx.py</div>
+    <p>spec.json → HTML（矢量+裁剪）或 PPTX（原生对象）</p>
+  </div>
+  <div class="stage s4">
+    <span class="step">Stage 4</span>
+    <h4>Verify</h4>
+    <div class="script">render_verify.py</div>
+    <p>无头 Chromium 截图，与原图并排对比</p>
+  </div>
+</div>
+
+<div class="callout">
+  <div class="callout-title">关键设计决策</div>
+  <p><strong>坐标系统一</strong>：OCR 输出的 bbox 直接是清洗图像像素坐标，与 Stage 2 人工测量在同一空间，无需额外变换。这是整个管道能"局部修改不互相破坏"的基础。</p>
+</div>
+
+<h2 id="pipeline"><span class="num">03</span>四阶段管道详解</h2>
+
+<h3>Stage 1 — 提取（extract_slide.py）</h3>
+<ul>
+  <li><strong>输入</strong>：原始照片（任意分辨率、任意角度）</li>
+  <li><strong>处理</strong>：OTSU 阈值检测亮区 → 四角点提取 → 4 点透视变换 → CLAHE 对比度恢复 → 强制 16:9</li>
+  <li><strong>输出</strong>：<code>slide_clean.jpg</code>（标准化 16:9 图像）</li>
+  <li><strong>依赖</strong>：opencv-python, Pillow</li>
+</ul>
+
+<h3>Stage 1.5 — OCR 结构化（ocr_extract.py）</h3>
+<p>核心阶段。运行 PP-StructureV3 管道，产出机器可读的结构化规格：</p>
+<pre><code><span class="comment"># spec.json 结构</span>
+{
+  <span class="str">"image_path"</span>: <span class="str">"slide_clean.jpg"</span>,
+  <span class="str">"image_size"</span>: [<span class="num-lit">1920</span>, <span class="num-lit">1080</span>],
+  <span class="str">"blocks"</span>: [
+    {
+      <span class="str">"type"</span>: <span class="str">"title"</span>,          <span class="comment"># title|text|caption|formula|table|figure|unknown</span>
+      <span class="str">"text"</span>: <span class="str">"系统架构设计"</span>,
+      <span class="str">"bbox"</span>: [<span class="num-lit">120</span>, <span class="num-lit">80</span>, <span class="num-lit">800</span>, <span class="num-lit">140</span>],  <span class="comment"># 清洗图像像素</span>
+      <span class="str">"reading_order"</span>: <span class="num-lit">0</span>
+    },
+    {
+      <span class="str">"type"</span>: <span class="str">"formula"</span>,
+      <span class="str">"latex"</span>: <span class="str">"E = mc^2"</span>,
+      <span class="str">"bbox"</span>: [...]
+    },
+    {
+      <span class="str">"type"</span>: <span class="str">"table"</span>,
+      <span class="str">"html"</span>: <span class="str">"&lt;table&gt;&lt;tr&gt;&lt;td&gt;...&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;"</span>,
+      <span class="str">"bbox"</span>: [...]
+    }
+  ]
+}</code></pre>
+
+<h3>Stage 2-3 — 组装</h3>
+<p>两条分支共享 spec.json，但产出物形态不同：</p>
+
+<div class="card">
+  <div class="card-title">HTML 组装（assemble_html.py）</div>
+  <ul>
+    <li><strong>文本块</strong> → 真实可选 HTML 文本，绝对定位，颜色/字号从源像素采样</li>
+    <li><strong>公式/表格/图形</strong> → 原图像素裁剪，base64 内嵌（保持单文件）</li>
+    <li><strong>LaTeX/表格HTML</strong> → 保留为 <code>data-*</code> 属性，供矢量路径复用</li>
+    <li><strong>画布</strong>：固定 1280×720，<code>position:absolute</code> 定位（非 flex/grid）</li>
+  </ul>
+</div>
+
+<div class="card">
+  <div class="card-title">PPTX 组装（assemble_pptx.py）</div>
+  <ul>
+    <li><strong>文本/标题/说明</strong> → 原生 TextBox（可编辑，保留位置/字号/颜色）</li>
+    <li><strong>表格（HTML 可解析）</strong> → 原生 PPTX Table（可编辑单元格）</li>
+    <li><strong>公式/图形/不可解析表格</strong> → 原图像素裁剪，作为图片嵌入</li>
+    <li><strong>坐标系</strong>：EMU（English Metric Units），1 inch = 914400 EMU</li>
+  </ul>
+</div>
+
+<h3>Stage 4 — 验证（render_verify.py）</h3>
+<p>无头 Chromium 渲染 HTML → 1280×720 PNG，可选与原图生成并排对比图。检查顺序：裁剪溢出 → 碰撞 → 数学符号 → 图标 → 颜色漂移 → 文本保真 → 细节匹配 → 裁剪接缝。</p>
+
+<h2 id="models"><span class="num">04</span>模型选择策略</h2>
+
+<h3>4.1 11 个子模型</h3>
+<p>PP-StructureV3 不是单一模型，而是 11 个子模型的编排管道。本项目预下载全部 11 个，总计 1.7 GB：</p>
+
+<div class="model-grid">
+  <div class="model-card"><div class="name">PP-OCRv5_server_det</div><div class="role">文本检测</div><div class="size">87.9 MB</div></div>
+  <div class="model-card"><div class="name">PP-OCRv5_server_rec</div><div class="role">文本识别</div><div class="size">84.4 MB</div></div>
+  <div class="model-card"><div class="name">PP-DocLayout_plus-L</div><div class="role">布局检测</div><div class="size">~130 MB</div></div>
+  <div class="model-card"><div class="name">PP-DocBlockLayout</div><div class="role">区域检测</div><div class="size">~130 MB</div></div>
+  <div class="model-card"><div class="name">PP-FormulaNet_plus-L</div><div class="role">公式→LaTeX</div><div class="size">~180 MB</div></div>
+  <div class="model-card"><div class="name">SLANet_plus</div><div class="role">无线表格结构</div><div class="size">~22 MB</div></div>
+  <div class="model-card"><div class="name">SLANeXt_wired</div><div class="role">有线表格结构</div><div class="size">~22 MB</div></div>
+  <div class="model-card"><div class="name">RT-DETR-L_wired_table_cell_det</div><div class="role">有线表格单元格</div><div class="size">~130 MB</div></div>
+  <div class="model-card"><div class="name">RT-DETR-L_wireless_table_cell_det</div><div class="role">无线表格单元格</div><div class="size">~130 MB</div></div>
+  <div class="model-card"><div class="name">PP-LCNet_x1_0_textline_ori</div><div class="role">文本行方向</div><div class="size">~7 MB</div></div>
+  <div class="model-card"><div class="name">PP-LCNet_x1_0_table_cls</div><div class="role">表格分类</div><div class="size">~7 MB</div></div>
+</div>
+
+<h3 id="v5-vs-v6">4.2 PP-OCRv5 vs PP-OCRv6</h3>
+
+<div class="callout warn">
+  <div class="callout-title">为什么默认用 v5_server？</div>
+  <p>PP-StructureV3 的官方配置（<code>paddlex/configs/pipelines/PP-StructureV3.yaml</code>）默认使用 <strong>PP-OCRv5_server</strong> 作为文本层。这是 PaddlePaddle 团队自己的推荐配置，且 v5_server 是"高精度旗舰"，而 v6 只发布了轻量级变体（tiny/small/medium），<strong>没有 server 级</strong>。</p>
+</div>
+
+<table>
+  <thead><tr><th>版本</th><th>变体</th><th>定位</th><th>PP-StructureV3 集成</th></tr></thead>
+  <tbody>
+    <tr><td><strong>PP-OCRv5</strong></td><td>server, mobile</td><td>高精度旗舰 + 轻量</td><td>官方默认</td></tr>
+    <tr><td><strong>PP-OCRv6</strong></td><td>tiny, small, medium</td><td>下一代轻量改进</td><td>可选（仅文本层）</td></tr>
+  </tbody>
+</table>
+
+<p><strong>v6 按需下载策略</strong>：v6 权重不打包进仓库（避免膨胀 1.7 GB 基线），用户可自行下载后丢入 <code>models/</code> 目录，<code>ocr_extract.py</code> 自动识别。优先级如下（每个 kwarg 取第一个匹配的目录）：</p>
+
+<div class="ladder">
+  <div class="rung"><span class="prio">1</span><span><code>--det-model</code> / <code>--rec-model</code> CLI 指定的目录（如果存在）</span></div>
+  <div class="rung opt-in"><span class="prio">2</span><span><code>PP-OCRv6_medium_*</code>（如果存在）</span></div>
+  <div class="rung opt-in"><span class="prio">3</span><span><code>PP-OCRv6_small_*</code>（如果存在）</span></div>
+  <div class="rung opt-in"><span class="prio">4</span><span><code>PP-OCRv6_tiny_*</code>（如果存在）</span></div>
+  <div class="rung bundled"><span class="prio">5</span><span><code>PP-OCRv5_server_*</code>（仓库打包默认）</span></div>
+  <div class="rung bundled"><span class="prio">6</span><span><code>PP-OCRv5_mobile_*</code>（回退）</span></div>
+</div>
+
+<h3 id="offline">4.3 离线分发设计</h3>
+
+<p>核心目标：<strong>首次安装后，OCR 阶段零网络访问</strong>。实现机制：</p>
+
+<ol>
+  <li><strong>预下载</strong>：<code>setup_paddle.sh</code> 调用 <code>download_paddle_models.py</code>，通过 paddlex 内置下载器（HF → ModelScope → BOS 自动回退）拉取全部 11 个模型到 <code>photo-to-html/models/</code></li>
+  <li><strong>环境变量</strong>：运行时设置 <code>PH2H_MODELS_DIR</code>，<code>ocr_extract.py</code> 检测后通过 <code>*_model_dir</code> kwarg 直接挂载本地目录，绕过在线下载器</li>
+  <li><strong>格式兼容</strong>：<code>_resolve_local_models()</code> 同时支持 PaddleOCR 3.7+ 的 <code>inference.json + inference.pdiparams</code> 和旧版 <code>inference.pdmodel + inference.pdiparams</code></li>
+  <li><strong>完整性校验</strong>：<code>manifest.json</code> 记录每个文件的 SHA256，<code>--verify</code> 模式可校验任意副本</li>
+  <li><strong>版本控制</strong>：大权重文件（<code>*.pdiparams</code>, <code>*.pdmodel</code>）通过 Git LFS 托管，clone 后 <code>git lfs pull</code> 物化</li>
+</ol>
+
+<div class="callout success">
+  <div class="callout-title">绕过在线下载器的关键</div>
+  <p>PPStructureV3 的 <code>*_model_dir</code> kwarg 优先级高于 <code>*_model_name</code>。只要本地目录存在且包含 <code>inference.pdiparams</code> + <code>inference.json</code>，就不会触发任何网络请求。</p>
+</div>
+
+<h2 id="pptx"><span class="num">05</span>PPTX 重建策略</h2>
+
+<h3>5.1 元素映射</h3>
+
+<table>
+  <thead><tr><th>spec.json 块类型</th><th>PPTX 原生对象</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>title</code> / <code>text</code> / <code>caption</code></td><td>TextBox</td><td>可编辑文本，保留字号/颜色/位置</td></tr>
+    <tr><td><code>table</code>（HTML 可解析）</td><td>Table</td><td>原生表格，可编辑单元格</td></tr>
+    <tr><td><code>table</code>（不可解析）</td><td>Picture</td><td>回退为图片裁剪</td></tr>
+    <tr><td><code>formula</code></td><td>Picture</td><td>无网络渲染 LaTeX，直接裁剪原图</td></tr>
+    <tr><td><code>figure</code></td><td>Picture</td><td>裁剪 + 白平衡</td></tr>
+  </tbody>
+</table>
+
+<h3 id="color">5.2 颜色采样算法</h3>
+
+<p>文字颜色从源像素采样是 PPTX 保真度的关键。朴素方法（取 bbox 平均色）在"白底黑字"场景会采样出浅灰色。本项目采用<strong>中位数阈值 + 排序回退</strong>策略：</p>
+
+<pre><code><span class="kw">def</span> sample_text_color(img, bbox):
+    <span class="str">"""从文本 bbox 采样墨色，返回 RGB 元组。
+
+    对'亮背景上的稀疏墨迹'鲁棒：当 bbox 中 >80% 是背景时，
+    百分位阈值会坍缩到主导背景值。改用中位数亮度的 70% 作为
+    阈值（亮背景）或中位数 + 30% 净空（暗背景），若匹配像素
+    不足则回退到排序取最极端的 5%。
+    """</span>
+    <span class="kw">import</span> numpy <span class="kw">as</span> np
+    x1, y1, x2, y2 = bbox
+    region = img.crop((x1, y1, x2, y2))
+    a = np.asarray(region).reshape(-<span class="num-lit">1</span>, <span class="num-lit">3</span>)
+    lum = a.mean(axis=<span class="num-lit">1</span>)
+    median_lum = <span class="kw">float</span>(np.median(lum))
+    n = len(lum)
+    min_ink = max(<span class="num-lit">1</span>, n // <span class="num-lit">100</span>)  <span class="comment"># 至少 1% 像素</span>
+
+    <span class="kw">if</span> median_lum >= <span class="num-lit">128</span>:  <span class="comment"># 亮背景 → 墨色偏暗</span>
+        thr = median_lum * <span class="num-lit">0.7</span>
+        ink_pixels = a[lum <= thr]
+        <span class="kw">if</span> ink_pixels.size < min_ink:
+            n_ink = max(<span class="num-lit">1</span>, n // <span class="num-lit">20</span>)  <span class="comment"># 最暗 5%</span>
+            order = np.argsort(lum)
+            ink_pixels = a[order[:n_ink]]
+    <span class="kw">else</span>:                <span class="comment"># 暗背景 → 墨色偏亮</span>
+        thr = median_lum + (<span class="num-lit">255</span> - median_lum) * <span class="num-lit">0.3</span>
+        ink_pixels = a[lum >= thr]
+        <span class="kw">if</span> ink_pixels.size < min_ink:
+            n_ink = max(<span class="num-lit">1</span>, n // <span class="num-lit">20</span>)
+            order = np.argsort(lum)
+            ink_pixels = a[order[-n_ink:]]
+
+    r, g, b = ink_pixels.mean(axis=<span class="num-lit">0</span>).astype(<span class="kw">int</span>)
+    <span class="kw">return</span> (<span class="kw">int</span>(r), <span class="kw">int</span>(g), <span class="kw">int</span>(b))</code></pre>
+
+<div class="callout">
+  <div class="callout-title">算法要点</div>
+  <p>① 用中位数（而非均值）判断背景明暗，对稀疏墨迹鲁棒；② 阈值取中位数的 70%（亮）或 +30% 净空（暗），避免百分位坍缩；③ 像素不足时回退到排序取 5%，保证总有结果；④ 表格单元格颜色从整个表格 bbox 采样墨色，统一应用。</p>
+</div>
+
+<h2 id="testing"><span class="num">06</span>测试覆盖</h2>
+
+<div class="stats">
+  <div class="stat"><div class="num">96</div><div class="label">总测试数</div></div>
+  <div class="stat"><div class="num">26</div><div class="label">OCR 提取</div></div>
+  <div class="stat"><div class="num">23</div><div class="label">PPTX 组装</div></div>
+  <div class="stat"><div class="num">0.11<span style="font-size:14px">s</span></div><div class="label">OCR 测试耗时</div></div>
+</div>
+
+<table>
+  <thead><tr><th>测试文件</th><th>覆盖范围</th></tr></thead>
+  <tbody>
+    <tr><td><code>test_ocr_extract.py</code></td><td>bbox 归一化、类型映射、schema 解析、离线模型解析（v5/v6/legacy 格式）、v6 优先级</td></tr>
+    <tr><td><code>test_assemble_pptx.py</code></td><td>表格 HTML 解析、裁剪、颜色采样（含稀疏墨迹）、PPTX 生成</td></tr>
+    <tr><td><code>test_assemble_html.py</code></td><td>HTML 组装、base64 嵌入、坐标映射</td></tr>
+    <tr><td><code>test_extract_slide.py</code></td><td>透视校正、角点检测、比例强制</td></tr>
+    <tr><td><code>test_crop_region.py</code></td><td>裁剪、白平衡、flat-field、key-light 透明</td></tr>
+  </tbody>
+</table>
+
+<!-- ==================== 使用指导 ==================== -->
+
+<h2 id="prereq"><span class="num">07</span>环境准备</h2>
+
+<h3>7.1 必须预先安装的依赖</h3>
+
+<table>
+  <thead><tr><th>要求</th><th>版本</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Python</strong></td>
+      <td>3.9 – 3.12</td>
+      <td>PaddlePaddle 3.x 无 3.13+ wheel；PaddleOCR 3.7 不支持 3.8。<code>python3 --version</code> 检查</td>
+    </tr>
+    <tr>
+      <td><strong>pip</strong></td>
+      <td>≥ 21</td>
+      <td>随 Python 自带，<code>setup_paddle.sh</code> 会升级</td>
+    </tr>
+    <tr>
+      <td><strong>bash</strong></td>
+      <td>任意</td>
+      <td>macOS/Linux 自带；Windows 用 WSL 或 Git Bash</td>
+    </tr>
+    <tr>
+      <td><strong>git-lfs</strong></td>
+      <td>任意</td>
+      <td>仅 clone GitHub 仓库时需要（1.7 GB 模型走 LFS）。从 https://git-lfs.com 安装后 <code>git lfs install</code></td>
+    </tr>
+    <tr>
+      <td><strong>网络访问</strong></td>
+      <td>—</td>
+      <td>首次安装拉取 ~500 MB pip 包 + 1.7 GB 模型；之后完全离线</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <div class="callout-title">Apple Silicon 注意</div>
+  <p>确认 <code>file $(which python3)</code> 报告 <code>arm64</code>。Rosetta/x86 Python 会拉取 x86 wheel，导致模拟运行（慢 3-5 倍）。</p>
+</div>
+
+<h3>7.2 由 setup_paddle.sh 自动安装</h3>
+<p>以下包无需手动准备，脚本会处理：</p>
+<ul>
+  <li><code>paddlepaddle>=3.3</code>（CPU/GPU/Mac 三种模式）</li>
+  <li><code>paddleocr>=3.7.0,&lt;4</code></li>
+  <li><code>opencv-python</code>、<code>Pillow</code>、<code>numpy</code></li>
+  <li><code>python-pptx>=0.6.23</code></li>
+  <li><code>playwright</code>（HTML 验证用）</li>
+  <li>11 个 PP-StructureV3 子模型（1.7 GB）</li>
+</ul>
+
+<h2 id="install"><span class="num">08</span>安装步骤</h2>
+
+<h3>8.1 从 GitHub clone（含模型）</h3>
+<pre><code><span class="comment"># 1. 安装 git-lfs（一次性）</span>
+brew install git-lfs <span class="comment"># macOS</span>
+git lfs install
+
+<span class="comment"># 2. clone 仓库（会自动拉取 LFS 模型文件）</span>
+git clone https://github.com/tohnee/photo-2-ppt.git
+cd photo-2-ppt
+
+<span class="comment"># 3. 如果 clone 时 LFS 没拉全，手动拉取</span>
+git lfs pull
+
+<span class="comment"># 4. 验证模型完整性</span>
+python3 photo-to-html/scripts/download_paddle_models.py --verify photo-to-html/models
+<span class="comment"># -> verify: OK — 11 model directories, all checksums match.</span></code></pre>
+
+<h3>8.2 安装 Python 依赖</h3>
+<pre><code><span class="comment"># CPU 模式（默认）</span>
+bash photo-to-html/scripts/setup_paddle.sh
+
+<span class="comment"># GPU/CUDA 模式</span>
+bash photo-to-html/scripts/setup_paddle.sh gpu
+
+<span class="comment"># Apple Silicon (MPS) 模式</span>
+bash photo-to-html/scripts/setup_paddle.sh mac
+
+<span class="comment"># 跳过模型下载（已从 clone 获得）</span>
+PADDLE_SKIP_MODELS=1 bash photo-to-html/scripts/setup_paddle.sh</code></pre>
+
+<h3>8.3 验证安装</h3>
+<pre><code><span class="comment"># 烟雾测试</span>
+<span class="kw">export</span> PH2H_MODELS_DIR=$(pwd)/photo-to-html/models
+python3 photo-to-html/scripts/ocr_extract.py slide_clean.jpg --out spec
+<span class="comment"># 应输出: [ocr] using local weights from .../models (11 model dirs)</span></code></pre>
+
+<h2 id="quickstart"><span class="num">09</span>快速开始</h2>
+
+<h3>9.1 一键端到端</h3>
+<pre><code><span class="comment"># 自动模式：图片 → HTML + PPTX，无需 LLM 参与</span>
+python3 photo-to-html/scripts/run_pipeline.py photo.jpg \
+    --out-dir out --format both --verify
+
+<span class="comment"># 输出：</span>
+<span class="comment"># out/slide_clean.jpg   透视校正后的清洗图</span>
+<span class="comment"># out/spec.json         OCR 结构化规格</span>
+<span class="comment"># out/slide.html        自包含 HTML</span>
+<span class="comment"># out/slide.pptx        可编辑 PPTX</span>
+<span class="comment"># out/slide_render.png  HTML 渲染验证截图</span></code></pre>
+
+<h3>9.2 分阶段运行</h3>
+<pre><code><span class="comment"># Stage 1: 提取</span>
+python3 photo-to-html/scripts/extract_slide.py photo.jpg --output slide_clean.jpg
+
+<span class="comment"># Stage 1.5: OCR</span>
+<span class="kw">export</span> PH2H_MODELS_DIR=$(pwd)/photo-to-html/models
+python3 photo-to-html/scripts/ocr_extract.py slide_clean.jpg --out spec
+
+<span class="comment"># Stage 2-3: 组装</span>
+python3 photo-to-html/scripts/assemble_html.py spec.json --out slide.html
+python3 photo-to-html/scripts/assemble_pptx.py spec.json --out slide.pptx
+
+<span class="comment"># Stage 4: 验证</span>
+PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers \
+    python3 photo-to-html/scripts/render_verify.py slide.html --ref slide_clean.jpg</code></pre>
+
+<h3>9.3 v6 按需下载</h3>
+
+<p>默认使用 v5_server。若要尝试 v6，下载权重到 <code>models/</code> 目录即可自动识别：</p>
+
+<pre><code><span class="kw">cd</span> photo-to-html
+
+<span class="comment"># 选择变体：medium（最佳精度）| small（均衡）| tiny（最快）</span>
+VARIANT=medium
+
+<span class="comment"># 方式 A — huggingface_hub（推荐）：</span>
+pip install huggingface_hub
+python3 - &lt;&lt;EOF
+<span class="kw">from</span> huggingface_hub <span class="kw">import</span> snapshot_download
+<span class="kw">for</span> task <span class="kw">in</span> (<span class="str">"det"</span>, <span class="str">"rec"</span>):
+    repo = <span class="str">f"PaddlePaddle/PP-OCRv6_${VARIANT}_{task}"</span>
+    snapshot_download(
+        repo_id=repo,
+        local_dir=<span class="str">f"models/PP-OCRv6_${VARIANT}_{task}"</span>,
+        allow_patterns=[<span class="str">"inference.json"</span>, <span class="str">"inference.pdiparams"</span>,
+                        <span class="str">"inference.yml"</span>, <span class="str">"config.json"</span>],
+    )
+    print(<span class="str">f"  OK: models/PP-OCRv6_${VARIANT}_{task}"</span>)
+EOF
+
+<span class="comment"># 重新运行，自动用 v6</span>
+python3 scripts/ocr_extract.py slide_clean.jpg --out spec
+<span class="comment"># -> [ocr] using local weights from .../models (11 model dirs)</span>
+<span class="comment">#    （v6 优先级高于 v5，自动选中）</span></code></pre>
+
+<div class="callout">
+  <div class="callout-title">强制使用 v5（即使 v6 存在）</div>
+  <p>若 v6 效果不如 v5，可强制指定：<code>--det-model PP-OCRv5_server_det --rec-model PP-OCRv5_server_rec</code></p>
+</div>
+
+<h3 id="cli">9.4 CLI 参数参考</h3>
+
+<h4>run_pipeline.py</h4>
+<pre><code>python3 run_pipeline.py &lt;photo&gt; [options]
+
+选项：
+  --out-dir DIR        输出目录（默认 out）
+  --mode MODE          auto | spec（默认 auto）
+  --format FORMAT      html | pptx | both（默认 html）
+  --ratio RATIO        16:9 | 4:3 | auto（默认 16:9）
+  --device DEVICE      cpu | gpu | mps
+  --det-model NAME     文本检测模型名（如 PP-OCRv6_medium_det）
+  --rec-model NAME     文本识别模型名（如 PP-OCRv6_medium_rec）
+  --lang LANG          语言代码
+  --no-white-balance   禁用裁剪白平衡
+  --verify             渲染 HTML 到 PNG 验证
+  --models-dir PATH    离线模型目录（默认自动检测）</code></pre>
+
+<h4>ocr_extract.py</h4>
+<pre><code>python3 ocr_extract.py &lt;slide_clean.jpg&gt; --out &lt;spec_prefix&gt; [options]
+
+选项：
+  --out PREFIX         输出前缀（生成 spec.json + spec.overlay.png）
+  --device DEVICE      计算设备
+  --det-model NAME     文本检测模型
+  --rec-model NAME     文本识别模型
+  --lang LANG          语言
+
+环境变量：
+  PH2H_MODELS_DIR      离线模型目录（设置后零网络访问）</code></pre>
+
+<h2 id="troubleshoot"><span class="num">10</span>故障排查</h2>
+
+<table>
+  <thead><tr><th>症状</th><th>原因</th><th>解决</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>RuntimeError: No available model</code></td>
+      <td>PaddleOCR 找不到本地权重且无网络</td>
+      <td>设置 <code>PH2H_MODELS_DIR</code> 并重跑 <code>setup_paddle.sh</code></td>
+    </tr>
+    <tr>
+      <td><code>WARNING: PH2H_MODELS_DIR exists but contains no recognized model directories</code></td>
+      <td><code>models/</code> 不完整或目录名不匹配</td>
+      <td>重跑 <code>download_paddle_models.py --out-dir models/</code></td>
+    </tr>
+    <tr>
+      <td><code>verify: SHA256: ...</code></td>
+      <td>传输中位腐烂或解压错误</td>
+      <td>重新下载：<code>download_paddle_models.py --out-dir models/</code></td>
+    </tr>
+    <tr>
+      <td>HTTP 403 / SSL 错误</td>
+      <td>企业代理拦截 HuggingFace</td>
+      <td><code>PADDLE_MIRROR=baidu_bos</code> 或 <code>PADDLE_MIRROR=modelscope</code></td>
+    </tr>
+    <tr>
+      <td>Apple Silicon MPS 不可用</td>
+      <td>使用了 Rosetta Python</td>
+      <td>确认 <code>file $(which python3)</code> 报告 <code>arm64</code></td>
+    </tr>
+    <tr>
+      <td>HuggingFace 429 Too Many Requests</td>
+      <td>频繁自动请求</td>
+      <td>切换镜像 <code>--mirror modelscope</code> 或 <code>--mirror baidu_bos</code></td>
+    </tr>
+    <tr>
+      <td>指定 v6 但实际跑 v5</td>
+      <td>本地无 v6 目录，回退到 v5</td>
+      <td>检查 <code>models/PP-OCRv6_*</code> 是否存在；或接受在线下载（需网络）</td>
+    </tr>
+    <tr>
+      <td>文字颜色采样为浅灰</td>
+      <td>稀疏墨迹场景（已修复）</td>
+      <td>更新到最新版，算法已用中位数 70% 阈值 + 5% 排序回退</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="api"><span class="num">11</span>脚本 API 参考</h2>
+
+<table>
+  <thead><tr><th>脚本</th><th>职责</th><th>关键函数</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>extract_slide.py</code></td>
+      <td>Stage 1 透视校正</td>
+      <td><code>detect_screen_corners()</code>, <code>four_point_transform()</code></td>
+    </tr>
+    <tr>
+      <td><code>ocr_extract.py</code></td>
+      <td>Stage 1.5 OCR 结构化</td>
+      <td><code>build_structure()</code>, <code>_resolve_local_models()</code>, <code>parse_structure_result()</code></td>
+    </tr>
+    <tr>
+      <td><code>assemble_html.py</code></td>
+      <td>HTML 组装</td>
+      <td><code>white_balance()</code>, <code>crop_to_data_uri()</code></td>
+    </tr>
+    <tr>
+      <td><code>assemble_pptx.py</code></td>
+      <td>PPTX 组装</td>
+      <td><code>sample_text_color()</code>, <code>parse_table_html()</code>, <code>crop_to_bytes()</code></td>
+    </tr>
+    <tr>
+      <td><code>run_pipeline.py</code></td>
+      <td>端到端编排</td>
+      <td><code>resolve_models_dir()</code>, <code>run()</code></td>
+    </tr>
+    <tr>
+      <td><code>download_paddle_models.py</code></td>
+      <td>模型下载/校验</td>
+      <td><code>_download_models_into()</code>, <code>verify_only()</code>, <code>_generate_manifest()</code></td>
+    </tr>
+    <tr>
+      <td><code>setup_paddle.sh</code></td>
+      <td>一键环境安装</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><code>crop_region.py</code></td>
+      <td>区域裁剪工具</td>
+      <td><code>--white-balance</code>, <code>--flat-field</code>, <code>--key-light N</code></td>
+    </tr>
+    <tr>
+      <td><code>render_verify.py</code></td>
+      <td>HTML 渲染验证</td>
+      <td>Playwright 截图 + 并排对比图</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>核心函数：_resolve_local_models()</h3>
+<p>离线模式的核心。遍历 <code>PH2H_MODELS_DIR</code>，按优先级匹配模型目录，返回 <code>*_model_dir</code> kwarg 字典：</p>
+
+<div class="code-anno">
+  输入：<code>root</code>（模型目录 Path）, <code>det_model</code>（CLI 指定检测模型名，可选）, <code>rec_model</code>（CLI 指定识别模型名，可选）<br>
+  输出：<code>{"text_detection_model_dir": "/path/to/PP-OCRv6_medium_det", ...}</code><br>
+  逻辑：对每个 kwarg，按候选列表顺序找第一个存在的目录（含 <code>inference.pdiparams</code> + <code>inference.json</code>），找到即 break
+</div>
+
+<h3>核心函数：build_structure()</h3>
+<p>构建 PPStructureV3 管道。关键逻辑：</p>
+<ol>
+  <li>检测 <code>PH2H_MODELS_DIR</code>，存在则调用 <code>_resolve_local_models()</code></li>
+  <li>本地找到的模型通过 <code>*_model_dir</code> 挂载</li>
+  <li>CLI 指定但本地没有的模型，通过 <code>*_model_name</code> 传递（触发在线下载）</li>
+  <li>无 <code>PH2H_MODELS_DIR</code> 时，所有 <code>--det-model</code>/<code>--rec-model</code> 走在线下载</li>
+</ol>
+
+<footer>
+  <p><strong>仓库</strong>：https://github.com/tohnee/photo-2-ppt &nbsp;·&nbsp;
+     <strong>测试</strong>：96 passing &nbsp;·&nbsp;
+     <strong>模型</strong>：11 个 / 1.7 GB (Git LFS) &nbsp;·&nbsp;
+     <strong>许可证</strong>：Proprietary</p>
+  <p style="margin-top:8px;">本报告基于 photo-to-html skill 源码与设计文档自动生成。技术栈：PaddleOCR 3.7.0 / PP-StructureV3 / python-pptx / Playwright。</p>
+</footer>
+
+</main>
+</div>
+</body>
+</html>
