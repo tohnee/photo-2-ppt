@@ -3,7 +3,7 @@
 # photo-to-html — PaddlePaddle + PaddleOCR one-shot setup
 #
 # Installs the runtime Python packages and (by default) pre-downloads the
-# PP-OCRv6 + PP-StructureV3 model weights into ``photo-to-html/models/`` so
+# PP-OCRv5 + PP-StructureV3 model weights into ``photo-to-html/models/`` so
 # the OCR stage can run 100% offline afterwards.
 #
 #   Usage (run in an environment with open network access):
@@ -113,8 +113,10 @@ fi
 echo "[3/4] installing paddleocr>=3.7.0 and imaging libraries …"
 $PIP install --upgrade "paddleocr>=3.7.0,<4"
 $PIP install --upgrade opencv-python Pillow numpy
+# python-pptx is required by assemble_pptx.py for offline .pptx rebuild.
+$PIP install --upgrade "python-pptx>=0.6.23"
 
-# ---- 4) pre-download weights (PP-OCRv6 + PP-StructureV3) ----------------------
+# ---- 4) pre-download weights (PP-OCRv5 + PP-StructureV3) ----------------------
 if [[ "${PADDLE_SKIP_MODELS:-0}" == "1" ]]; then
     echo
     echo "[4/4] (skipped model pre-download; PADDLE_SKIP_MODELS=1)"

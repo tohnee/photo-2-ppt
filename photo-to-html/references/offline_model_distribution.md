@@ -133,16 +133,25 @@ python scripts/download_paddle_models.py --verify /path/to/models
 This reads `manifest.json` and re-computes SHA256 for every file. Exit code
 0 means every file is byte-identical to the download-time state.
 
-### What to exclude from version control
+### Version control
 
-The model weights are binary blobs. **Never commit them to git.** Keep the
-`models/` directory listed in `.gitignore`:
+Model weights are binary blobs (1.7 GB total). They are tracked via
+**Git LFS** so the repo stays clone-able and weights are byte-verifiable
+on every clone. The `.gitattributes` at the repo root registers the
+LFS filters:
 
 ```
-photo-to-html/models/
-*.pdmodel
-*.pdiparams
+*.pdiparams filter=lfs diff=lfs merge=lfs -text
+*.pdmodel   filter=lfs diff=lfs merge=lfs -text
 ```
+
+`inference.json` (model structure, ~1 MB per model) and the small
+config/yml files are committed as regular git text — only the large
+binary weight tensors go through LFS.
+
+After cloning, `git lfs pull` materializes the weights on disk. The
+`manifest.json` SHA256 check (`download_paddle_models.py --verify`)
+catches any LFS corruption.
 
 ## 3. Pointing ocr_extract.py at the offline tree
 
@@ -209,3 +218,94 @@ Baidu BOS (mainland China):
 
 If any one stops serving, re-run with `--mirror` switched to a different
 host — the model identifier is stable across mirrors.
+
+## 7. PP-OCRv6 (optional, user-downloaded)
+
+The bundled `models/` tree ships **PP-OCRv5_server** as the text layer
+because that is what PP-StructureV3's official config defaults to. If you
+want to try the newer **PP-OCRv6** (tiny/small/medium) for text detection
+and recognition, download the weights yourself and drop them into the
+same `models/` directory — `ocr_extract.py` will pick them up automatically.
+
+### What v6 replaces
+
+Only the **text detection** and **text recognition** sub-models. The other
+9 sub-models (layout, region, table structure, table cell detection,
+formula recognition, textline orientation, table classification) stay on
+their default versions — PP-StructureV3 does not yet ship v6 variants
+for those.
+
+### Downloading v6 weights
+
+```bash
+cd photo-to-html
+
+# Pick a variant: medium (best accuracy) | small (balanced) | tiny (fastest)
+VARIANT=medium   # or: small | tiny
+
+# Option A — via huggingface_hub (recommended):
+pip install huggingface_hub
+python - <<EOF
+from huggingface_hub import snapshot_download
+import os
+for task in ("det", "rec"):
+    repo = f"PaddlePaddle/PP-OCRv6_${VARIANT}_{task}"
+    snapshot_download(
+        repo_id=repo,
+        local_dir=f"models/PP-OCRv6_${VARIANT}_{task}",
+        allow_patterns=["inference.json", "inference.pdiparams",
+                        "inference.yml", "config.json"],
+    )
+    print(f"  OK: models/PP-OCRv6_${VARIANT}_{task}")
+EOF
+
+# Option B — via paddlex's own downloader (tries HF/ModelScope/BOS):
+python -c "
+import os
+os.environ['PADDLE_PDX_CACHE_HOME'] = '$(pwd)/models/.cache'
+from paddleocr import PPStructureV3
+PPStructureV3(
+    text_detection_model_name='PP-OCRv6_${VARIANT}_det',
+    text_recognition_model_name='PP-OCRv6_${VARIANT}_rec',
+    use_doc_orientation_classify=False,
+    use_doc_unwarping=False,
+)
+" 2>&1 | tail -5
+# then copy from models/.cache/official_models/ to models/
+cp -r models/.cache/official_models/PP-OCRv6_${VARIANT}_det models/
+cp -r models/.cache/official_models/PP-OCRv6_${VARIANT}_rec models/
+```
+
+### Priority order (automatic)
+
+Once v6 weights are on disk, `ocr_extract.py` resolves the text layer in
+this order (first match wins):
+
+1. `--det-model` / `--rec-model` CLI flag (if that directory exists)
+2. `PP-OCRv6_medium_*` (if present)
+3. `PP-OCRv6_small_*` (if present)
+4. `PP-OCRv6_tiny_*` (if present)
+5. `PP-OCRv5_server_*` (bundled default)
+6. `PP-OCRv5_mobile_*` (fallback)
+
+So: **just drop v6 weights into `models/` and re-run** — no other change
+needed. If you want to force v5 even when v6 is present, pass
+`--det-model PP-OCRv5_server_det --rec-model PP-OCRv5_server_rec`.
+
+### Forcing a specific v6 variant
+
+```bash
+# Use tiny even if medium is also downloaded:
+python scripts/ocr_extract.py slide_clean.jpg --out spec \
+    --det-model PP-OCRv6_tiny_det --rec-model PP-OCRv6_tiny_rec
+```
+
+### Caveats
+
+- v6 weights are **not** in the Git LFS bundle — you download them
+  separately. The `manifest.json` from `setup_paddle.sh` will not list
+  them; re-run `python scripts/download_paddle_models.py --manifest-only`
+  to regenerate the manifest after adding v6 dirs.
+- v6 has no `server` tier. For maximum accuracy on dense slides, the
+  bundled v5_server may still beat v6_medium. Benchmark on your own
+  images before switching permanently.

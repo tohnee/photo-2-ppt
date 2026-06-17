@@ -154,9 +154,13 @@ class TestEnhanceContrast:
 # ── main() CLI smoke test ────────────────────────────────────────────────────
 
 class TestCLI:
-    def test_missing_input(self, tmp_path):
+    def test_missing_input(self, tmp_path, monkeypatch):
         from extract_slide import main
         import io, contextlib
+        # Force sys.argv to have no positional args so argparse rejects.
+        # Without this, a prior test's monkeypatch can leak and main()
+        # would see stale args.
+        monkeypatch.setattr("sys.argv", ["extract_slide.py"])
         f = io.StringIO()
         with pytest.raises(SystemExit) as exc:
             with contextlib.redirect_stderr(f):

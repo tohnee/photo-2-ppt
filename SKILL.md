@@ -13,7 +13,7 @@ Turn a photograph of a slide into a **single self-contained HTML file** that rep
 ## The pipeline at a glance
 
 1. **Extract** — perspective-correct the slide out of the photo (`scripts/extract_slide.py`)
-1.5. **OCR / structure** — machine-read text, coordinates, formula LaTeX, table HTML with PP-StructureV3 (text layer = **PP-OCRv6**) → `spec.json` (`scripts/ocr_extract.py`)
+1.5. **OCR / structure** — machine-read text, coordinates, formula LaTeX, table HTML with PP-StructureV3 (text layer = **PP-OCRv5**) → `spec.json` (`scripts/ocr_extract.py`)
 2. **Inventory** — enumerate every element: text (verbatim), diagrams, icons, colors, coordinates. *The spec does most of this for you;* your remaining job is the visual reasoning OCR can't do — classifying and redrawing figures.
 3. **Rebuild** — one fixed-canvas HTML file per slide; vector first, raster crop only as fallback
 4. **Verify** — headless-Chromium screenshot, compare side-by-side with the original, fix, repeat
@@ -25,7 +25,7 @@ Stages 1–2 are identical in spirit to `photo-to-pptx` — if that skill is ins
 **Auto (closed loop) — "one image in, one HTML/PPT out", no LLM in the loop.** Stage 1.5 reads the slide; the assembler positions selectable text and embeds every non-text region as a faithful, white-balanced photo crop. Best for **batch archival** of many conference slides where you don't need vector-editable diagrams.
 
 ```bash
-bash scripts/setup_paddle.sh                                  # ONCE, on open network (downloads PP-OCRv6 weights)
+bash scripts/setup_paddle.sh                                  # ONCE, on open network (downloads PP-OCRv5 weights)
 python scripts/run_pipeline.py photo.jpg --out-dir out --format html   # html | pptx | both
 ```
 
@@ -57,12 +57,12 @@ Detects the bright screen, 4-point perspective transform, CLAHE contrast recover
 
 ```bash
 python scripts/ocr_extract.py out/slide_clean.jpg --out out/spec
-# force a tier:  --det-model PP-OCRv6_medium_det --rec-model PP-OCRv6_medium_rec --device gpu
+# force a tier:  --det-model PP-OCRv5_medium_det --rec-model PP-OCRv5_medium_rec --device gpu
 ```
 
-Runs PP-StructureV3 — layout analysis + table-structure + formula→LaTeX, with **PP-OCRv6** (PaddleOCR ≥ 3.7.0) as the text detection/recognition layer — and writes `spec.json` plus a `spec.overlay.png` showing detected blocks. Coordinates are in **cleaned-image pixels**, the same space as every Stage 2 measurement (`scale = 1280 / cleaned_width`), so they drop straight onto the canvas with no extra transform.
+Runs PP-StructureV3 — layout analysis + table-structure + formula→LaTeX, with **PP-OCRv5** (PaddleOCR ≥ 3.7.0) as the text detection/recognition layer — and writes `spec.json` plus a `spec.overlay.png` showing detected blocks. Coordinates are in **cleaned-image pixels**, the same space as every Stage 2 measurement (`scale = 1280 / cleaned_width`), so they drop straight onto the canvas with no extra transform.
 
-Why PP-StructureV3 rather than bare PP-OCRv6: v6 is the text layer only (det+rec — strings + boxes, tiny and fast, beating much larger VLMs at pure text, but no formulas/tables/reading-order). PP-StructureV3 wraps it and adds exactly the structure a faithful rebuild needs. The block `type` is normalized to `title | text | caption | formula | table | figure`; figures are what you redraw.
+Why PP-StructureV3 rather than bare PP-OCRv5: v5 is the text layer only (det+rec — strings + boxes, tiny and fast, beating much larger VLMs at pure text, but no formulas/tables/reading-order). PP-StructureV3 wraps it and adds exactly the structure a faithful rebuild needs. The block `type` is normalized to `title | text | caption | formula | table | figure`; figures are what you redraw.
 
 Weights download on first use from HuggingFace/BOS/ModelScope — hosts the sandbox allowlist usually blocks — so run `setup_paddle.sh` once on open network (set `PADDLE_PDX_MODEL_SOURCE=BOS` if in mainland China). See `references/ocr_integration.md`.
 
@@ -196,11 +196,13 @@ If Playwright/Chromium is unavailable, fall back to `wkhtmltoimage` (older WebKi
 
 ## Bundled scripts
 
-- `scripts/run_pipeline.py` — **closed-loop orchestrator**: extract → ocr → assemble → verify (`--mode auto|spec`, `--format html|pptx|both`, `--verify`)
+- `scripts/run_pipeline.py` — **closed-loop orchestrator**: extract → ocr → assemble → verify (`--mode auto|spec`, `--format html|pptx|both`, `--verify`, `--models-dir <path>`); auto-detects `photo-to-html/models/` for offline OCR
 - `scripts/extract_slide.py` — Stage 1 (identical to photo-to-pptx's; opencv + Pillow)
-- `scripts/ocr_extract.py` — Stage 1.5: PP-StructureV3 (PP-OCRv6 text layer) → `spec.json` + overlay
+- `scripts/ocr_extract.py` — Stage 1.5: PP-StructureV3 (PP-OCRv5 text layer) → `spec.json` + overlay; honors `PH2H_MODELS_DIR` for offline use
 - `scripts/assemble_html.py` — auto-mode assembler: `spec.json` → single self-contained HTML (selectable text + faithful base64 crops; LaTeX/table-HTML kept as `data-*`)
-- `scripts/setup_paddle.sh` — one-time `paddlepaddle` + `paddleocr>=3.7.0` install and PP-OCRv6 weight prefetch
+- `scripts/assemble_pptx.py` — **offline .pptx rebuild**: `spec.json` → editable PowerPoint (native TextBox + Table + picture crops via python-pptx; no LLM in the loop)
+- `scripts/download_paddle_models.py` — bulk-download the 11 PP-OCRv5/PP-StructureV3 weights into `models/` with SHA256 verification (called by `setup_paddle.sh`)
+- `scripts/setup_paddle.sh` — one-time `paddlepaddle` + `paddleocr>=3.7.0` + `python-pptx` install and PP-OCRv5 weight prefetch
 - `scripts/crop_region.py` — crop a bbox from the cleaned image → base64 data-URI / `<img>` tag on stdout
 - `scripts/render_verify.py` — Stage 4 screenshot + optional side-by-side sheet (playwright; falls back to wkhtmltoimage)
 
@@ -217,11 +219,13 @@ If Playwright/Chromium is unavailable, fall back to `wkhtmltoimage` (older WebKi
 
 ```bash
 # Rebuild + verify (vector path, always needed):
-pip install opencv-python Pillow numpy playwright --break-system-packages
+pip install opencv-python Pillow numpy playwright python-pptx --break-system-packages
 # Chromium binaries usually pre-installed at /opt/pw-browsers in the Claude environment
 
 # OCR closed loop (Stage 1.5) — run once on open network; the sandbox allowlist
 # blocks the model-weight hosts, so do this on your own machine/server:
-bash scripts/setup_paddle.sh          # CPU   (installs paddlepaddle>=3.3 + paddleocr>=3.7.0)
+bash scripts/setup_paddle.sh          # CPU   (installs paddlepaddle>=3.3 + paddleocr>=3.7.0 + python-pptx + PP-OCRv5 weights)
 bash scripts/setup_paddle.sh gpu      # CUDA build
 ```
+
+**Offline mode**: once `setup_paddle.sh` has finished, the bundled `models/` directory (1.7 GB, 11 sub-models) lets `ocr_extract.py` and `assemble_pptx.py` run with **zero network access**. The orchestrator auto-detects `photo-to-html/models/` and exports `PH2H_MODELS_DIR` to every subprocess; you can also point at a custom location with `--models-dir <path>` or `export PH2H_MODELS_DIR=<path>`.

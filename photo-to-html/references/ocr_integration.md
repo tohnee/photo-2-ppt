@@ -1,4 +1,4 @@
-# OCR integration (PP-OCRv6 / PP-StructureV3) — Stage 1.5
+# OCR integration (PP-OCRv5 / PP-StructureV3) — Stage 1.5
 
 This skill gained an automated OCR/structure stage between **Extract** (Stage 1)
 and **Inventory** (Stage 2). It replaces error-prone by-eye transcription with a
@@ -15,13 +15,13 @@ photo.jpg --extract_slide.py--> slide_clean.jpg --ocr_extract.py--> spec.json
                           (Claude redraws figures as inline SVG)
 ```
 
-## Why PP-StructureV3 (not bare PP-OCRv6)
+## Why PP-StructureV3 (not bare PP-OCRv5)
 
-PP-OCRv6 is the **text layer** only — detection + recognition. It is tiny
-(1.5M–34.5M params), fast (~5.2× CPU speedup vs PP-OCRv5), and beats much larger
-VLMs at pure text. But it has no notion of formulas, tables, or reading order.
+PP-OCRv5 is the **text layer** only — detection + recognition. It is tiny
+(1.5M–34.5M params), fast, and beats much larger VLMs at pure text. But it has
+no notion of formulas, tables, or reading order.
 
-`PP-StructureV3` runs PP-OCRv6 underneath for text and adds layout analysis,
+`PP-StructureV3` runs PP-OCRv5 underneath for text and adds layout analysis,
 table-structure recognition, and formula→LaTeX, and — importantly here — exposes
 **per-block coordinates** (finer than the PaddleOCR-VL series). Those coordinates
 map straight onto this skill's `scale = 1280 / cleaned_width` canvas convention.
@@ -37,7 +37,7 @@ pixels** (same space as every measurement in Stage 2).
   "image_size": { "width": 1600, "height": 900 },
   "canvas":     { "width": 1280, "height": 720 },
   "scale": 0.8,                       // 1280 / image width
-  "ocr": { "engine": "PP-StructureV3", "text_backbone": "PP-OCRv6",
+  "ocr": { "engine": "PP-StructureV3", "text_backbone": "PP-OCRv5",
            "schema_source": "parsing_res_list" },
   "blocks": [
     { "id": "b0", "type": "title",   "bbox": [x1,y1,x2,y2], "text": "...", "reading_order": 0 },
@@ -99,10 +99,10 @@ python scripts/ocr_extract.py   out/slide_clean.jpg --out out/spec
 python scripts/assemble_html.py out/spec.json --out out/slide.html
 ```
 
-Force specific PP-OCRv6 text models (sizes: tiny / small / medium):
+Force specific PP-OCRv5 text models (sizes: tiny / small / medium):
 ```bash
 python scripts/ocr_extract.py out/slide_clean.jpg --out out/spec \
-    --det-model PP-OCRv6_medium_det --rec-model PP-OCRv6_medium_rec --device gpu
+    --det-model PP-OCRv5_medium_det --rec-model PP-OCRv5_medium_rec --device gpu
 ```
 
 ## Model source / mirrors
@@ -131,7 +131,7 @@ and the ModelScope mirror.
 ## Files
 
 - `scripts/setup_paddle.sh` — one-time install + model prefetch
-- `scripts/ocr_extract.py` — PP-StructureV3 (PP-OCRv6) → `spec.json` + overlay
+- `scripts/ocr_extract.py` — PP-StructureV3 (PP-OCRv5) → `spec.json` + overlay
 - `scripts/assemble_html.py` — spec → self-contained HTML (auto mode)
+- `scripts/assemble_pptx.py` — same spec → editable .pptx (offline)
 - `scripts/run_pipeline.py` — extract → ocr → assemble → verify orchestrator
-- `../photo-to-pptx/scripts/assemble_pptx.py` — same spec → editable .pptx

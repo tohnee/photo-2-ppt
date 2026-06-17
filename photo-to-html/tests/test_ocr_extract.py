@@ -161,3 +161,162 @@ class TestParseStructureResult:
         }
         blocks, _ = parse_structure_result(res)
         assert blocks[0]["bbox"] == [10, 20, 100, 80]
+
+
+# ── _resolve_local_models ───────────────────────────────────────────────────
+
+from ocr_extract import _resolve_local_models
+
+class TestResolveLocalModels:
+    """Regression tests for offline model directory resolution.
+
+    PaddleOCR 3.7+ ships models as ``inference.json`` (structure) +
+    ``inference.pdiparams`` (weights), NOT the legacy
+    ``inference.pdmodel`` + ``inference.pdiparams`` pair. The resolver
+    must accept both layouts.
+    """
+
+    def _make_v37_model(self, root, name):
+        d = root / name
+        d.mkdir(parents=True)
+        (d / "inference.json").write_text("{}")
+        (d / "inference.pdiparams").write_bytes(b"\0" * 8)
+        (d / "inference.yml").write_text("config")
+        return d
+
+    def _make_legacy_model(self, root, name):
+        d = root / name
+        d.mkdir(parents=True)
+        (d / "inference.pdmodel").write_bytes(b"\0" * 8)
+        (d / "inference.pdiparams").write_bytes(b"\0" * 8)
+        return d
+
+    def test_resolves_v37_format(self, tmp_path):
+        from pathlib import Path
+        root = tmp_path / "models"
+        root.mkdir()
+        self._make_v37_model(root, "PP-OCRv5_server_det")
+        self._make_v37_model(root, "PP-OCRv5_server_rec")
+        resolved = _resolve_local_models(Path(root))
+        assert "text_detection_model_dir" in resolved
+        assert "text_recognition_model_dir" in resolved
+        assert resolved["text_detection_model_dir"].endswith("PP-OCRv5_server_det")
+
+    def test_resolves_legacy_format(self, tmp_path):
+        from pathlib import Path
+        root = tmp_path / "models"
+        root.mkdir()
+        self._make_legacy_model(root, "PP-OCRv5_server_det")
+        resolved = _resolve_local_models(Path(root))
+        assert "text_detection_model_dir" in resolved
+
+    def test_skips_dir_missing_weights(self, tmp_path):
+        from pathlib import Path
+        root = tmp_path / "models"
+        root.mkdir()
+        d = root / "PP-OCRv5_server_det"
+        d.mkdir()
+        (d / "inference.json").write_text("{}")
+        # no inference.pdiparams
+        resolved = _resolve_local_models(Path(root))
+        assert resolved == {}
+
+    def test_skips_dir_missing_structure(self, tmp_path):
+        from pathlib import Path
+        root = tmp_path / "models"
+        root.mkdir()
+        d = root / "PP-OCRv5_server_det"
+        d.mkdir()
+        (d / "inference.pdiparams").write_bytes(b"\0" * 8)
+        # no inference.json or inference.pdmodel
+        resolved = _resolve_local_models(Path(root))
+        assert resolved == {}
+
+    def test_resolves_all_11_models(self, tmp_path):
+        from pathlib import Path
+        root = tmp_path / "models"
+        root.mkdir()
+        names = [
+            "PP-OCRv5_server_det", "PP-OCRv5_server_rec",
+            "PP-DocLayout_plus-L", "PP-DocBlockLayout",
+            "SLANet_plus", "SLANeXt_wired",
+            "PP-FormulaNet_plus-L",
+            "PP-LCNet_x1_0_textline_ori", "PP-LCNet_x1_0_table_cls",
+            "RT-DETR-L_wired_table_cell_det",
+            "RT-DETR-L_wireless_table_cell_det",
+        ]
+        for n in names:
+            self._make_v37_model(root, n)
+        resolved = _resolve_local_models(Path(root))
+        assert len(resolved) == 11
+        expected_kwargs = {
+            "text_detection_model_dir", "text_recognition_model_dir",
+            "layout_detection_model_dir", "region_detection_model_dir",
+            "wireless_table_structure_recognition_model_dir",
+            "wired_table_structure_recognition_model_dir",
+            "formula_recognition_model_dir",
+            "textline_orientation_model_dir",
+            "table_classification_model_dir",
+            "wired_table_cells_detection_model_dir",
+            "wireless_table_cells_detection_model_dir",
+        }
+        assert set(resolved.keys()) == expected_kwargs
+
+    # ── PP-OCRv6 support (opt-in, user-downloaded) ──────────────────────────
+
+    def test_v6_preferred_over_v5_when_both_present(self, tmp_path):
+        """When both v5_server and v6_medium are on disk, v6 wins (opt-in)."""
+        from pathlib import Path
+        root = tmp_path / "models"
+        root.mkdir()
+        self._make_v37_model(root, "PP-OCRv5_server_det")
+        self._make_v37_model(root, "PP-OCRv5_server_rec")
+        self._make_v37_model(root, "PP-OCRv6_medium_det")
+        self._make_v37_model(root, "PP-OCRv6_medium_rec")
+        resolved = _resolve_local_models(Path(root))
+        assert resolved["text_detection_model_dir"].endswith("PP-OCRv6_medium_det")
+        assert resolved["text_recognition_model_dir"].endswith("PP-OCRv6_medium_rec")
+
+    def test_v6_alone_is_resolved(self, tmp_path):
+        """v6 without v5 should still populate text det/rec kwargs."""
+        from pathlib import Path
+        root = tmp_path / "models"
+        root.mkdir()
+        self._make_v37_model(root, "PP-OCRv6_small_det")
+        self._make_v37_model(root, "PP-OCRv6_small_rec")
+        resolved = _resolve_local_models(Path(root))
+        assert resolved["text_detection_model_dir"].endswith("PP-OCRv6_small_det")
+        assert resolved["text_recognition_model_dir"].endswith("PP-OCRv6_small_rec")
+
+    def test_cli_det_model_overrides_priority(self, tmp_path):
+        """--det-model PP-OCRv6_tiny_det wins even if v6_medium is present."""
+        from pathlib import Path
+        root = tmp_path / "models"
+        root.mkdir()
+        self._make_v37_model(root, "PP-OCRv6_medium_det")
+        self._make_v37_model(root, "PP-OCRv6_tiny_det")
+        resolved = _resolve_local_models(Path(root),
+                                         det_model="PP-OCRv6_tiny_det")
+        assert resolved["text_detection_model_dir"].endswith("PP-OCRv6_tiny_det")
+
+    def test_cli_det_model_not_on_disk_is_skipped(self, tmp_path):
+        """If --det-model names a dir not on disk, fall through to v6/v5."""
+        from pathlib import Path
+        root = tmp_path / "models"
+        root.mkdir()
+        self._make_v37_model(root, "PP-OCRv5_server_det")
+        resolved = _resolve_local_models(Path(root),
+                                         det_model="PP-OCRv6_medium_det")
+        # v6_medium_det not on disk -> falls back to v5_server_det
+        assert resolved["text_detection_model_dir"].endswith("PP-OCRv5_server_det")
+
+    def test_v6_medium_preferred_over_small_and_tiny(self, tmp_path):
+        """Within v6 variants, medium > small > tiny priority."""
+        from pathlib import Path
+        root = tmp_path / "models"
+        root.mkdir()
+        for name in ("PP-OCRv6_tiny_det", "PP-OCRv6_small_det",
+                     "PP-OCRv6_medium_det"):
+            self._make_v37_model(root, name)
+        resolved = _resolve_local_models(Path(root))
+        assert resolved["text_detection_model_dir"].endswith("PP-OCRv6_medium_det")

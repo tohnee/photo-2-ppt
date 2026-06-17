@@ -2,7 +2,7 @@
 """
 Stage 1.5 — OCR / structure extraction.
 
-Runs PaddleOCR PP-StructureV3 (text layer powered by PP-OCRv6) on a *cleaned*
+Runs PaddleOCR PP-StructureV3 (text layer powered by PP-OCRv5) on a *cleaned*
 slide image (the output of extract_slide.py) and emits a structured spec:
 
     <out>.json    a normalized layout spec (text + bbox + LaTeX + table HTML)
@@ -17,11 +17,11 @@ Usage:
     python ocr_extract.py slide_clean.jpg --out spec
     python ocr_extract.py slide_clean.jpg --out spec --device gpu
     python ocr_extract.py slide_clean.jpg --out spec \
-        --det-model PP-OCRv6_medium_det --rec-model PP-OCRv6_medium_rec
+        --det-model PP-OCRv5_server_det --rec-model PP-OCRv5_server_rec
 
-Why PP-StructureV3 and not bare PP-OCRv6:
-    PP-OCRv6 is detection+recognition only — text strings + boxes, no formulas,
-    tables, or reading order. PP-StructureV3 orchestrates PP-OCRv6 for the text
+Why PP-StructureV3 and not bare PP-OCRv5:
+    PP-OCRv5 is detection+recognition only — text strings + boxes, no formulas,
+    tables, or reading order. PP-StructureV3 orchestrates PP-OCRv5 for the text
     layer and adds layout analysis, table-structure recognition, and formula
     recognition (LaTeX), and exposes fine-grained per-block coordinates. That
     coordinate detail is exactly what a faithful slide rebuild needs.
@@ -145,7 +145,17 @@ def parse_structure_result(res_json: dict):
 
 def build_structure(device, det_model, rec_model, lang):
     """Build a PP-StructureV3 pipeline, preferring local weights when
-    ``PH2H_MODELS_DIR`` is set. Returns a PPStructureV3 instance."""
+    ``PH2H_MODELS_DIR`` is set. Returns a PPStructureV3 instance.
+
+    Model resolution priority for text det/rec:
+        1. If ``--det-model`` / ``--rec-model`` names a directory present in
+           ``$PH2H_MODELS_DIR``, use that directory (offline, no download).
+        2. Else if ``$PH2H_MODELS_DIR`` contains a PP-OCRv6 variant, use it
+           (v6 is opt-in; users who downloaded v6 weights get them by default).
+        3. Else if ``$PH2H_MODELS_DIR`` contains PP-OCRv5_server, use it.
+        4. Else fall back to PaddleOCR's online downloader with the
+           ``*_model_name`` kwarg (requires network on first use).
+    """
     from paddleocr import PPStructureV3
     kwargs: dict = {}
     if device:
@@ -154,7 +164,7 @@ def build_structure(device, det_model, rec_model, lang):
     # ---- local-weights mode: resolve model directories explicitly -----------
     local_root = os.environ.get("PH2H_MODELS_DIR")
     if local_root and os.path.isdir(local_root):
-        resolved = _resolve_local_models(Path(local_root))
+        resolved = _resolve_local_models(Path(local_root), det_model, rec_model)
         if not resolved:
             print(
                 f"WARNING: PH2H_MODELS_DIR={local_root} exists but contains no "
@@ -168,12 +178,26 @@ def build_structure(device, det_model, rec_model, lang):
             print(f"[ocr] using local weights from {local_root} "
                   f"({len(resolved)} model dirs)", file=sys.stderr)
 
-    # ---- overridable user picks ----------------------------------------------
-    # (explicit CLI names always win)
-    if det_model:
-        kwargs["text_detection_model_name"] = det_model
-    if rec_model:
-        kwargs["text_recognition_model_name"] = rec_model
+            # If user requested a specific det/rec model via CLI but it is NOT
+            # in the local bundle, pass the name through so PaddleOCR downloads
+            # it on first use (instead of silently using the bundled v5).
+            if det_model and "text_detection_model_dir" not in resolved:
+                kwargs["text_detection_model_name"] = det_model
+                print(f"[ocr] det model '{det_model}' not in local bundle; "
+                      "will download on first use (needs network).",
+                      file=sys.stderr)
+            if rec_model and "text_recognition_model_dir" not in resolved:
+                kwargs["text_recognition_model_name"] = rec_model
+                print(f"[ocr] rec model '{rec_model}' not in local bundle; "
+                      "will download on first use (needs network).",
+                      file=sys.stderr)
+    else:
+        # ---- online mode: pass user picks as *_model_name ------------------
+        if det_model:
+            kwargs["text_detection_model_name"] = det_model
+        if rec_model:
+            kwargs["text_recognition_model_name"] = rec_model
+
     if lang:
         kwargs["lang"] = lang
 
@@ -184,7 +208,8 @@ def build_structure(device, det_model, rec_model, lang):
     return PPStructureV3(**kwargs)
 
 
-def _resolve_local_models(root: "Path") -> dict:
+def _resolve_local_models(root: "Path", det_model: str = None,
+                          rec_model: str = None) -> dict:
     """Walk ``root`` looking for PaddleOCR 3.7-compatible model directories.
 
     The ``root`` directory is expected to contain one sub-directory per
@@ -192,12 +217,16 @@ def _resolve_local_models(root: "Path") -> dict:
     model cache (``$PADDLE_PDX_CACHE_HOME/official_models/``)::
 
         <root>/
-            PP-OCRv5_server_det/
-                inference.pdmodel  inference.pdiparams  ...
-            PP-OCRv5_server_rec/
-                inference.pdmodel  inference.pdiparams  ...
+            PP-OCRv5_server_det/          # default text detection (v5)
+                inference.json  inference.pdiparams  ...
+            PP-OCRv5_server_rec/          # default text recognition (v5)
+                inference.json  inference.pdiparams  ...
+            PP-OCRv6_medium_det/          # optional v6 text detection
+                inference.json  inference.pdiparams  ...
+            PP-OCRv6_medium_rec/          # optional v6 text recognition
+                inference.json  inference.pdiparams  ...
             PP-DocLayout_plus-L/
-                inference.pdmodel  inference.pdiparams  ...
+                ...
             PP-DocBlockLayout/
                 ...
             SLANet_plus/
@@ -215,31 +244,69 @@ def _resolve_local_models(root: "Path") -> dict:
             PP-LCNet_x1_0_table_cls/
                 ...
 
-    Returns a dict mapping PaddleOCR ``*_model_dir`` kwarg to a path string,
-    or ``None`` when that model is not found on disk.
+    For text_detection and text_recognition, both PP-OCRv5 (server/mobile)
+    and PP-OCRv6 (tiny/small/medium) directories are recognized. Priority
+    for each kwarg (first match wins):
+
+        1. CLI-specified model name (``--det-model`` / ``--rec-model``)
+        2. PP-OCRv6 variants (medium > small > tiny) — newer, opt-in
+        3. PP-OCRv5_server (the PP-StructureV3 default)
+        4. PP-OCRv5_mobile (fallback)
+
+    Returns a dict mapping PaddleOCR ``*_model_dir`` kwarg to a path string.
+    Missing models are simply omitted from the dict.
     """
-    # Map PaddleOCR 3.7 PPStructureV3 sub-model names to their *_model_dir
-    # kwargs. The default model names are taken from the paddlex 3.7
-    # official_models list (PP-OCRv5 for text, PP-DocLayout for layout, etc.).
-    name_to_kwarg = {
-        "PP-OCRv5_server_det": "text_detection_model_dir",
-        "PP-OCRv5_server_rec": "text_recognition_model_dir",
-        "PP-DocLayout_plus-L": "layout_detection_model_dir",
-        "PP-DocBlockLayout": "region_detection_model_dir",
-        "SLANet_plus": "wireless_table_structure_recognition_model_dir",
-        "SLANeXt_wired": "wired_table_structure_recognition_model_dir",
-        "PP-FormulaNet_plus-L": "formula_recognition_model_dir",
-        "PP-LCNet_x1_0_textline_ori": "textline_orientation_model_dir",
-        "PP-LCNet_x1_0_table_cls": "table_classification_model_dir",
-        "RT-DETR-L_wired_table_cell_det": "wired_table_cells_detection_model_dir",
-        "RT-DETR-L_wireless_table_cell_det": "wireless_table_cells_detection_model_dir",
+    # Map kwarg -> ordered list of candidate model directory names.
+    # For text det/rec, CLI override comes first, then v6 (opt-in), then
+    # v5_server (PP-StructureV3 default), then v5_mobile.
+    v6_det_candidates = ["PP-OCRv6_medium_det", "PP-OCRv6_small_det",
+                         "PP-OCRv6_tiny_det"]
+    v6_rec_candidates = ["PP-OCRv6_medium_rec", "PP-OCRv6_small_rec",
+                         "PP-OCRv6_tiny_rec"]
+
+    det_candidates = []
+    if det_model:
+        det_candidates.append(det_model)
+    det_candidates.extend(v6_det_candidates)
+    det_candidates.extend(["PP-OCRv5_server_det", "PP-OCRv5_mobile_det"])
+
+    rec_candidates = []
+    if rec_model:
+        rec_candidates.append(rec_model)
+    rec_candidates.extend(v6_rec_candidates)
+    rec_candidates.extend(["PP-OCRv5_server_rec", "PP-OCRv5_mobile_rec"])
+
+    kwarg_to_candidates = {
+        "text_detection_model_dir": det_candidates,
+        "text_recognition_model_dir": rec_candidates,
+        "layout_detection_model_dir": ["PP-DocLayout_plus-L"],
+        "region_detection_model_dir": ["PP-DocBlockLayout"],
+        "wireless_table_structure_recognition_model_dir": ["SLANet_plus"],
+        "wired_table_structure_recognition_model_dir": ["SLANeXt_wired"],
+        "formula_recognition_model_dir": ["PP-FormulaNet_plus-L"],
+        "textline_orientation_model_dir": ["PP-LCNet_x1_0_textline_ori"],
+        "table_classification_model_dir": ["PP-LCNet_x1_0_table_cls"],
+        "wired_table_cells_detection_model_dir": ["RT-DETR-L_wired_table_cell_det"],
+        "wireless_table_cells_detection_model_dir": ["RT-DETR-L_wireless_table_cell_det"],
     }
 
     out: dict = {}
-    for model_name, kwarg in name_to_kwarg.items():
-        candidate = root / model_name
-        if candidate.is_dir() and any(candidate.glob("inference.pdmodel*")):
-            out[kwarg] = str(candidate)
+    for kwarg, candidates in kwarg_to_candidates.items():
+        for model_name in candidates:
+            if not model_name:
+                continue
+            candidate = root / model_name
+            if not candidate.is_dir():
+                continue
+            # PaddleOCR 3.7+ ships models as `inference.json` (structure) +
+            # `inference.pdiparams` (weights). Legacy 2.x used
+            # `inference.pdmodel` + `inference.pdiparams`. Accept either.
+            has_weights = (candidate / "inference.pdiparams").is_file()
+            has_structure = (candidate / "inference.json").is_file() or \
+                            (candidate / "inference.pdmodel").is_file()
+            if has_weights and has_structure:
+                out[kwarg] = str(candidate)
+                break  # first match wins (highest priority)
     return out
 
 
@@ -269,9 +336,9 @@ def main():
     ap.add_argument("--out", default="spec", help="output prefix (writes <out>.json, <out>.overlay.png)")
     ap.add_argument("--device", default=None, help="cpu | gpu | gpu:0  (default: paddle auto)")
     ap.add_argument("--det-model", default=None,
-                    help="force text detection model, e.g. PP-OCRv6_medium_det")
+                    help="force text detection model, e.g. PP-OCRv5_server_det")
     ap.add_argument("--rec-model", default=None,
-                    help="force text recognition model, e.g. PP-OCRv6_medium_rec")
+                    help="force text recognition model, e.g. PP-OCRv5_server_rec")
     ap.add_argument("--lang", default=None, help="recognition language hint (e.g. ch, en)")
     ap.add_argument("--no-overlay", action="store_true")
     args = ap.parse_args()
@@ -325,7 +392,7 @@ def main():
         "image_size": {"width": W, "height": H},
         "canvas": {"width": canvas_w, "height": canvas_h},
         "scale": round(scale, 6),
-        "ocr": {"engine": "PP-StructureV3", "text_backbone": "PP-OCRv6",
+        "ocr": {"engine": "PP-StructureV3", "text_backbone": "PP-OCRv5",
                 "schema_source": source,
                 "det_model": args.det_model, "rec_model": args.rec_model},
         "blocks": blocks,

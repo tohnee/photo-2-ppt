@@ -128,7 +128,7 @@ class TestHTMLOutput:
             "image_size": {"width": 1280, "height": 720},
             "canvas": {"width": 1280, "height": 720},
             "scale": 1.0,
-            "ocr": {"engine": "PP-StructureV3", "text_backbone": "PP-OCRv6",
+            "ocr": {"engine": "PP-StructureV3", "text_backbone": "PP-OCRv5",
                     "schema_source": "test", "det_model": None, "rec_model": None},
             "blocks": [
                 {"id": "b0", "type": "title", "bbox": [50, 20, 500, 80],
