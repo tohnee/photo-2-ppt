@@ -77,6 +77,45 @@ Full details, the spec schema, model mirrors (BOS/HF/ModelScope), and troublesho
 
 ---
 
+## Fully automated benchmark mode (PP-OCRv6 vs MinerU2.5-Pro)
+
+This skill is designed to run without human intervention. For current-model
+comparisons, use the benchmark setup and runner instead of hand-editing outputs:
+
+```bash
+# 1) Install runtime packages and warm/download model caches. This installs the
+#    Python libraries, then downloads model weights into the configured cache so
+#    first-run network time is not counted in benchmark latency.
+bash scripts/setup_benchmark.sh cpu
+# GPU users can run: PH2H_MINERU_BACKEND=vllm bash scripts/setup_benchmark.sh gpu
+
+# 2) Run both chains on one image or a directory of images.
+python scripts/run_benchmark.py data/slides --out-dir benchmark_out
+
+# 3) Optional supervised evaluation with ground-truth text and/or clean renders.
+python scripts/run_benchmark.py data/photos \
+  --reference-text-dir data/gt_text \
+  --reference-image-dir data/gt_images \
+  --out-dir benchmark_out
+```
+
+The runner executes the same deterministic pre-processing for both backends:
+`extract_slide.py` first writes `slide_clean.jpg`; the Paddle chain then runs
+PP-OCRv6 through `run_pipeline.py` and renders HTML for visual metrics, while
+the MinerU2.5-Pro chain writes Markdown plus a normalized content spec via
+`scripts/mineru_extract.py`. `scripts/evaluate_reconstruction.py` records block
+counts, text similarity/edit distance when ground truth is available, and image
+MSE/MAE/PSNR when a rendered image and reference image are available.
+
+Important benchmarking rule: `pip install` installs code, not the large model
+weights. `scripts/download_benchmark_models.py` intentionally warms the
+PP-OCRv6 and MinerU2.5-Pro caches before evaluation so the benchmark is
+repeatable, offline-capable after warmup, and not polluted by first-use download
+latency. Pin `HF_HOME`/`TRANSFORMERS_CACHE` in CI or Docker for fully
+reproducible runs.
+
+---
+
 ## Stage 1: Extract
 
 ```bash
@@ -239,6 +278,11 @@ If Playwright/Chromium is unavailable, fall back to `wkhtmltoimage` (older WebKi
 - `scripts/download_paddle_models.py` — pre-download + verify offline model bundle (`--verify models/`)
 - `scripts/crop_region.py` — crop a bbox from the cleaned image → base64 data-URI / `<img>` tag on stdout
 - `scripts/render_verify.py` — Stage 4 screenshot + optional side-by-side sheet (playwright; falls back to wkhtmltoimage)
+- `scripts/setup_benchmark.sh` — install PP-OCRv6 + MinerU2.5-Pro benchmark dependencies and warm model caches
+- `scripts/download_benchmark_models.py` — pre-download/warm PP-OCRv6 and MinerU2.5-Pro model weights for reproducible benchmark runs
+- `scripts/mineru_extract.py` — run MinerU2.5-Pro on a cleaned slide and emit Markdown plus a normalized content spec
+- `scripts/evaluate_reconstruction.py` — compute automated content and optional rendered-image metrics
+- `scripts/run_benchmark.py` — end-to-end no-human PP-OCRv6 vs MinerU2.5-Pro benchmark orchestrator
 
 ## Reference files
 

@@ -25,9 +25,43 @@ Stages 1–2 are identical in spirit to `photo-to-pptx` — if that skill is ins
 **Auto (closed loop) — "one image in, one HTML/PPT out", no LLM in the loop.** Stage 1.5 reads the slide; the assembler positions selectable text and embeds every non-text region as a faithful, white-balanced photo crop. Best for **batch archival** of many conference slides where you don't need vector-editable diagrams.
 
 ```bash
-bash scripts/setup_paddle.sh                                  # ONCE, on open network (downloads PP-OCRv5 weights)
+# First-time setup (downloads ~1.7 GB of PP-StructureV3 model weights into models/):
+bash scripts/setup_paddle.sh
+
+# Then run the pipeline:
 python scripts/run_pipeline.py photo.jpg --out-dir out --format html   # html | pptx | both
 ```
+
+### Offline model bundle
+
+The `setup_paddle.sh` script pre-downloads all PPStructureV3 sub-models
+(PP-OCRv5, PP-DocLayout, PP-FormulaNet, SLANeXt, etc.) into
+`photo-to-html/models/` (~1.7 GB). Once present, the OCR stage runs 100%
+offline — no network access needed.
+
+**Using the bundled models:**
+
+```bash
+export PH2H_MODELS_DIR=$(pwd)/photo-to-html/models
+python scripts/ocr_extract.py slide_clean.jpg --out slide/spec
+```
+
+**Verifying integrity:**
+
+```bash
+python scripts/download_paddle_models.py --verify models/
+# -> verify: OK — 11 model directories, all checksums match.
+```
+
+**Re-downloading from scratch (e.g., after paddleocr upgrade):**
+
+```bash
+bash scripts/setup_paddle.sh
+# or manually:
+python scripts/download_paddle_models.py --out-dir models/
+```
+
+Detailed offline distribution guide: [references/offline_model_distribution.md](references/offline_model_distribution.md)
 
 This is the path to reach for first when the request is "just archive these slides faithfully." It is faithful **by construction** — non-text regions are the real pixels — but diagrams stay raster.
 
@@ -40,6 +74,45 @@ python scripts/run_pipeline.py photo.jpg --out-dir out --mode spec     # -> out/
 Then continue with Stages 2–4: text/formulas/tables are pre-transcribed with coordinates in the spec; open `spec.overlay.png` to see which regions were classed as figures and need an SVG redraw. **Mixed is normal and best**: trust the spec for text/formula/table, redraw the few figures that matter, let auto-mode crops stand in for irregular instance-dense figures the vector-vs-raster tree says to crop anyway.
 
 Full details, the spec schema, model mirrors (BOS/HF/ModelScope), and troubleshooting live in `references/ocr_integration.md`.
+
+---
+
+## Fully automated benchmark mode (PP-OCRv6 vs MinerU2.5-Pro)
+
+This skill is designed to run without human intervention. For current-model
+comparisons, use the benchmark setup and runner instead of hand-editing outputs:
+
+```bash
+# 1) Install runtime packages and warm/download model caches. This installs the
+#    Python libraries, then downloads model weights into the configured cache so
+#    first-run network time is not counted in benchmark latency.
+bash scripts/setup_benchmark.sh cpu
+# GPU users can run: PH2H_MINERU_BACKEND=vllm bash scripts/setup_benchmark.sh gpu
+
+# 2) Run both chains on one image or a directory of images.
+python scripts/run_benchmark.py data/slides --out-dir benchmark_out
+
+# 3) Optional supervised evaluation with ground-truth text and/or clean renders.
+python scripts/run_benchmark.py data/photos \
+  --reference-text-dir data/gt_text \
+  --reference-image-dir data/gt_images \
+  --out-dir benchmark_out
+```
+
+The runner executes the same deterministic pre-processing for both backends:
+`extract_slide.py` first writes `slide_clean.jpg`; the Paddle chain then runs
+PP-OCRv6 through `run_pipeline.py` and renders HTML for visual metrics, while
+the MinerU2.5-Pro chain writes Markdown plus a normalized content spec via
+`scripts/mineru_extract.py`. `scripts/evaluate_reconstruction.py` records block
+counts, text similarity/edit distance when ground truth is available, and image
+MSE/MAE/PSNR when a rendered image and reference image are available.
+
+Important benchmarking rule: `pip install` installs code, not the large model
+weights. `scripts/download_benchmark_models.py` intentionally warms the
+PP-OCRv6 and MinerU2.5-Pro caches before evaluation so the benchmark is
+repeatable, offline-capable after warmup, and not polluted by first-use download
+latency. Pin `HF_HOME`/`TRANSFORMERS_CACHE` in CI or Docker for fully
+reproducible runs.
 
 ---
 
@@ -57,7 +130,7 @@ Detects the bright screen, 4-point perspective transform, CLAHE contrast recover
 
 ```bash
 python scripts/ocr_extract.py out/slide_clean.jpg --out out/spec
-# force a tier:  --det-model PP-OCRv5_medium_det --rec-model PP-OCRv5_medium_rec --device gpu
+# force a tier:  --det-model PP-OCRv5_server_det --rec-model PP-OCRv5_server_rec --device gpu
 ```
 
 Runs PP-StructureV3 — layout analysis + table-structure + formula→LaTeX, with **PP-OCRv5** (PaddleOCR ≥ 3.7.0) as the text detection/recognition layer — and writes `spec.json` plus a `spec.overlay.png` showing detected blocks. Coordinates are in **cleaned-image pixels**, the same space as every Stage 2 measurement (`scale = 1280 / cleaned_width`), so they drop straight onto the canvas with no extra transform.
@@ -196,15 +269,20 @@ If Playwright/Chromium is unavailable, fall back to `wkhtmltoimage` (older WebKi
 
 ## Bundled scripts
 
-- `scripts/run_pipeline.py` — **closed-loop orchestrator**: extract → ocr → assemble → verify (`--mode auto|spec`, `--format html|pptx|both`, `--verify`, `--models-dir <path>`); auto-detects `photo-to-html/models/` for offline OCR
+- `scripts/run_pipeline.py` — **closed-loop orchestrator**: extract → ocr → assemble → verify (`--mode auto|spec`, `--format html|pptx|both`, `--verify`). Auto-detects `photo-to-html/models/` for offline OCR.
 - `scripts/extract_slide.py` — Stage 1 (identical to photo-to-pptx's; opencv + Pillow)
-- `scripts/ocr_extract.py` — Stage 1.5: PP-StructureV3 (PP-OCRv5 text layer) → `spec.json` + overlay; honors `PH2H_MODELS_DIR` for offline use
-- `scripts/assemble_html.py` — auto-mode assembler: `spec.json` → single self-contained HTML (selectable text + faithful base64 crops; LaTeX/table-HTML kept as `data-*`)
-- `scripts/assemble_pptx.py` — **offline .pptx rebuild**: `spec.json` → editable PowerPoint (native TextBox + Table + picture crops via python-pptx; no LLM in the loop)
-- `scripts/download_paddle_models.py` — bulk-download the 11 PP-OCRv5/PP-StructureV3 weights into `models/` with SHA256 verification (called by `setup_paddle.sh`)
-- `scripts/setup_paddle.sh` — one-time `paddlepaddle` + `paddleocr>=3.7.0` + `python-pptx` install and PP-OCRv5 weight prefetch
+- `scripts/ocr_extract.py` — Stage 1.5: PP-StructureV3 (PP-OCRv5 text layer) → `spec.json` + overlay
+- `scripts/assemble_html.py` — auto-mode HTML assembler: `spec.json` → single self-contained HTML (selectable text + faithful base64 crops; LaTeX/table-HTML kept as `data-*`)
+- `scripts/assemble_pptx.py` — auto-mode PPTX assembler: `spec.json` → editable `.pptx` (native TextBox + Table; formulas/figures as picture crops)
+- `scripts/setup_paddle.sh` — one-time `paddlepaddle` + `paddleocr>=3.7.0` install and PP-OCRv5 weight prefetch
+- `scripts/download_paddle_models.py` — pre-download + verify offline model bundle (`--verify models/`)
 - `scripts/crop_region.py` — crop a bbox from the cleaned image → base64 data-URI / `<img>` tag on stdout
 - `scripts/render_verify.py` — Stage 4 screenshot + optional side-by-side sheet (playwright; falls back to wkhtmltoimage)
+- `scripts/setup_benchmark.sh` — install PP-OCRv6 + MinerU2.5-Pro benchmark dependencies and warm model caches
+- `scripts/download_benchmark_models.py` — pre-download/warm PP-OCRv6 and MinerU2.5-Pro model weights for reproducible benchmark runs
+- `scripts/mineru_extract.py` — run MinerU2.5-Pro on a cleaned slide and emit Markdown plus a normalized content spec
+- `scripts/evaluate_reconstruction.py` — compute automated content and optional rendered-image metrics
+- `scripts/run_benchmark.py` — end-to-end no-human PP-OCRv6 vs MinerU2.5-Pro benchmark orchestrator
 
 ## Reference files
 
@@ -217,6 +295,21 @@ If Playwright/Chromium is unavailable, fall back to `wkhtmltoimage` (older WebKi
 
 ## Dependencies
 
+### Prerequisites (must be on the machine before setup)
+
+| Requirement | Version | Notes |
+| --- | --- | --- |
+| **Python** | 3.9 – 3.12 | PaddlePaddle 3.x has no wheel for 3.13+; PaddleOCR 3.7 drops 3.8. `python3 --version` to check. |
+| **pip** | ≥ 21 | Bundled with Python; `setup_paddle.sh` upgrades it. |
+| **bash** | any | For `setup_paddle.sh`. macOS/Linux ship it; on Windows use WSL or Git Bash. |
+| **git-lfs** | any | Only needed if cloning from GitHub — the 1.7 GB model weights are LFS-tracked. Install from https://git-lfs.com, then `git lfs install`. |
+| **Network access** | — | First-time setup fetches ~500 MB of pip packages + 1.7 GB of model weights. After that, OCR runs 100% offline. |
+
+On **Apple Silicon**, confirm `file $(which python3)` reports `arm64` — a
+Rosetta/x86 Python will pull the x86 wheel and run emulated (slow).
+
+### One-shot install (handles everything else)
+
 ```bash
 # Rebuild + verify (vector path, always needed):
 pip install opencv-python Pillow numpy playwright python-pptx --break-system-packages
@@ -226,6 +319,19 @@ pip install opencv-python Pillow numpy playwright python-pptx --break-system-pac
 # blocks the model-weight hosts, so do this on your own machine/server:
 bash scripts/setup_paddle.sh          # CPU   (installs paddlepaddle>=3.3 + paddleocr>=3.7.0 + python-pptx + PP-OCRv5 weights)
 bash scripts/setup_paddle.sh gpu      # CUDA build
+bash scripts/setup_paddle.sh mac      # Apple Silicon (MPS) build
 ```
+
+`setup_paddle.sh` installs: `paddlepaddle>=3.3`, `paddleocr>=3.7.0,<4`,
+`opencv-python`, `Pillow`, `numpy`, `python-pptx>=0.6.23`, and pre-downloads
+the 11 PP-StructureV3 sub-models (~1.7 GB) into `photo-to-html/models/`.
+
+### PP-OCRv6 (optional, user-downloaded)
+
+The bundled weights use **PP-OCRv5_server** (PP-StructureV3's default text
+layer). To try the newer **PP-OCRv6** (tiny/small/medium), download the
+weights yourself — `ocr_extract.py` auto-detects them. See
+[references/offline_model_distribution.md §7](references/offline_model_distribution.md)
+for download commands and priority order.
 
 **Offline mode**: once `setup_paddle.sh` has finished, the bundled `models/` directory (1.7 GB, 11 sub-models) lets `ocr_extract.py` and `assemble_pptx.py` run with **zero network access**. The orchestrator auto-detects `photo-to-html/models/` and exports `PH2H_MODELS_DIR` to every subprocess; you can also point at a custom location with `--models-dir <path>` or `export PH2H_MODELS_DIR=<path>`.
